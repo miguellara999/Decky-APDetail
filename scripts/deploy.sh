@@ -22,7 +22,7 @@ pnpm run build
 echo ">> Copiando a $DECK_HOST:$REMOTE_TMP"
 ssh "$DECK_HOST" "rm -rf '$REMOTE_TMP' && mkdir -p '$REMOTE_TMP'"
 rsync -az --delete \
-  dist main.py plugin.json package.json README.md \
+  dist main.py plugin.json package.json README.md oui.json.gz \
   "$DECK_HOST:$REMOTE_TMP/"
 
 echo ">> Instalando en $REMOTE_DIR y reiniciando Decky (pedirá la contraseña de sudo)"

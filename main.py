@@ -1,4 +1,6 @@
 import asyncio
+import gzip
+import json
 import os
 import re
 from typing import Any
@@ -65,6 +67,42 @@ def _band(freq_mhz: int) -> str:
 def _to_int(value: str) -> int:
     m = re.search(r"-?\d+", value or "")
     return int(m.group(0)) if m else 0
+
+
+class OuiDb:
+    """Tabla OUI -> fabricante generada con scripts/build-oui.py (oui.json.gz)."""
+
+    def __init__(self) -> None:
+        self._table: dict[str, str] | None = None
+
+    def _load(self) -> dict[str, str]:
+        if self._table is None:
+            path = os.path.join(decky.DECKY_PLUGIN_DIR, "oui.json.gz")
+            try:
+                with gzip.open(path, "rt", encoding="utf-8") as f:
+                    self._table = json.load(f)
+                decky.logger.info("OUI cargada: %d prefijos", len(self._table))
+            except Exception:  # noqa: BLE001
+                decky.logger.exception("No se pudo cargar %s", path)
+                self._table = {}
+        return self._table
+
+    def lookup(self, mac: str) -> str:
+        hexmac = re.sub(r"[^0-9A-F]", "", (mac or "").upper())
+        if len(hexmac) != 12:
+            return ""
+        # Bit "locally administered": MAC aleatoria/virtual, sin fabricante.
+        if int(hexmac[1], 16) & 0x2:
+            return "MAC local (sin fabricante)"
+        table = self._load()
+        # MA-S (36 bits) > MA-M (28 bits) > MA-L (24 bits)
+        for n in (9, 7, 6):
+            if (org := table.get(hexmac[:n])):
+                return org
+        return ""
+
+
+_oui = OuiDb()
 
 
 class Plugin:
@@ -135,6 +173,7 @@ class Plugin:
             aps.append({
                 "in_use": in_use.strip() == "*",
                 "bssid": bssid.upper(),
+                "vendor": _oui.lookup(bssid),
                 "ssid": ssid,
                 "signal": _to_int(signal),
                 "freq": freq_mhz,
@@ -173,12 +212,15 @@ class Plugin:
                 result["band"] = _band(link["freq"])
             result["pinned_bssid"] = await self._pinned_bssid(dev["connection"])
             result["ip4"] = await self._ip4(dev["device"])
+            if "bssid" in result:
+                result["vendor"] = _oui.lookup(result["bssid"])
 
             # Completar con la info del AP en uso según nmcli (SSID, canal, señal %)
             aps = await self._list_aps(dev["device"], rescan=False)
             current = next((a for a in aps if a["in_use"]), None)
             if current:
                 result.setdefault("bssid", current["bssid"])
+                result.setdefault("vendor", current["vendor"])
                 result["ssid"] = current["ssid"]
                 result["signal"] = current["signal"]
                 result["chan"] = current["chan"]
@@ -258,6 +300,7 @@ class Plugin:
 
     async def _main(self):
         decky.logger.info("APDetail cargado")
+        await asyncio.get_running_loop().run_in_executor(None, _oui._load)
 
     async def _unload(self):
         decky.logger.info("APDetail descargado")

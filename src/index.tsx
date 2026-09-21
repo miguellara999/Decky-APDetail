@@ -23,6 +23,7 @@ type Status = {
   connection?: string;
   ssid?: string;
   bssid?: string;
+  vendor?: string;
   signal?: number; // 0-100 (nmcli)
   signal_dbm?: number; // iw
   freq?: number;
@@ -37,6 +38,7 @@ type Status = {
 type AccessPoint = {
   in_use: boolean;
   bssid: string;
+  vendor: string;
   ssid: string;
   signal: number;
   freq: number;
@@ -190,6 +192,11 @@ function Content() {
               </Field>
             </PanelSectionRow>
             <PanelSectionRow>
+              <Field label="Fabricante" focusable>
+                {status.vendor || "Desconocido"}
+              </Field>
+            </PanelSectionRow>
+            <PanelSectionRow>
               <Field label="Señal" focusable>
                 {status.signal != null ? `${status.signal}%` : ""}
                 {status.signal_dbm != null ? ` (${status.signal_dbm} dBm)` : ""}
@@ -259,12 +266,13 @@ function Content() {
               disabled={busy !== null || ap.in_use || (showAll && !isSameNetwork(ap))}
               description={
                 (showAll ? `${ap.ssid || "(SSID oculto)"} · ` : "") +
-                `${ap.band} · canal ${ap.chan} · ${ap.signal}% ${signalBars(ap.signal)}`
+                `${ap.bssid} · ${ap.band} · canal ${ap.chan} · ${ap.signal}% ${signalBars(ap.signal)}`
               }
               onClick={() => void onConnect(ap)}
             >
               {ap.in_use ? "● " : ""}
-              {ap.bssid}
+              {ap.vendor ? `${ap.vendor} · ` : ""}
+              {shortBssid(ap.bssid)}
               {busy === ap.bssid ? "  (conectando…)" : ap.in_use ? "  (en uso)" : ""}
             </ButtonItem>
           </PanelSectionRow>

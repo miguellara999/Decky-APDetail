@@ -8,7 +8,7 @@ PLUGIN=APDetail
 
 pnpm run build
 rm -rf out && mkdir -p "out/$PLUGIN"
-cp -r dist main.py plugin.json package.json README.md "out/$PLUGIN/"
+cp -r dist main.py plugin.json package.json README.md oui.json.gz "out/$PLUGIN/"
 [ -f LICENSE ] && cp LICENSE "out/$PLUGIN/"
 rm -f "out/$PLUGIN/dist/index.js.map"
 
