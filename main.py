@@ -437,20 +437,39 @@ class Plugin:
         decky.logger.info("Conectado a BSSID %s en %s", bssid, conn)
         return {"ok": True, "bssid": bssid, "connection": conn}
 
+    async def _wait_connected(self, seconds: float) -> bool:
+        for _ in range(int(seconds * 2)):
+            await asyncio.sleep(0.5)
+            dev = await self._wifi_device()
+            if dev and dev["state"].startswith("connected") and dev["connection"]:
+                return True
+        return False
+
     async def _restart_iwd_and_wait(self) -> dict[str, Any]:
+        # Recordamos el perfil activo: NetworkManager (backend iwd) no siempre
+        # reasocia solo cuando iwd se reinicia debajo, así que lo levantamos nosotros.
+        dev = await self._wifi_device()
+        conn = dev["connection"] if dev else ""
+        device = dev["device"] if dev else ""
+
         rc, _, err = await _run("systemctl", "daemon-reload")
         if rc != 0:
             return {"ok": False, "error": err.strip() or "daemon-reload falló"}
         rc, _, err = await _run("systemctl", "restart", "iwd", timeout=60)
         if rc != 0:
             return {"ok": False, "error": err.strip() or "No se pudo reiniciar iwd"}
-        # Esperar a que vuelva la conexión (hasta ~20 s)
-        for _ in range(40):
-            await asyncio.sleep(0.5)
-            dev = await self._wifi_device()
-            if dev and dev["state"].startswith("connected"):
+
+        if await self._wait_connected(8):
+            return {"ok": True}
+        if conn:
+            decky.logger.info("Reconectando %r tras reiniciar iwd", conn)
+            args = ["nmcli", "connection", "up", conn] + (["ifname", device] if device else [])
+            rc, _, err = await _run(*args, timeout=60)
+            if rc != 0:
+                decky.logger.warning("nmcli connection up falló: %s", err.strip())
+            if await self._wait_connected(12):
                 return {"ok": True}
-        return {"ok": True, "warning": "iwd reiniciado; la conexión aún se está restableciendo"}
+        return {"ok": True, "warning": "iwd reiniciado; reconecta el WiFi desde el menú de la Deck"}
 
     async def set_iwd_dev_mode(self, enable: bool) -> dict[str, Any]:
         """Activa/revierte el modo desarrollador de iwd mediante un drop-in de
