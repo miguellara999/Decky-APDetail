@@ -1,0 +1,11 @@
+{
+  "name": "APDetail",
+  "author": "Miguel",
+  "flags": ["root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["wifi", "network", "utility"],
+    "description": "Muestra a qué punto de acceso WiFi (BSSID) estás conectado y permite cambiar a otro AP del mismo SSID.",
+    "image": ""
+  }
+}

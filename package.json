@@ -1,0 +1,41 @@
+{
+  "name": "apdetail",
+  "version": "0.1.0",
+  "description": "Muestra a qué punto de acceso WiFi (BSSID) está conectada la Steam Deck y permite cambiar a otro AP del mismo SSID.",
+  "type": "module",
+  "scripts": {
+    "build": "shx rm -rf dist && rollup -c",
+    "watch": "rollup -c -w"
+  },
+  "keywords": [
+    "decky",
+    "plugin",
+    "steam-deck",
+    "wifi",
+    "network"
+  ],
+  "author": "Miguel",
+  "license": "MIT",
+  "devDependencies": {
+    "@decky/rollup": "^1.0.1",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "rollup": "^4.18.1",
+    "shx": "^0.3.4",
+    "tslib": "^2.6.3",
+    "typescript": "^5.5.3"
+  },
+  "dependencies": {
+    "@decky/api": "^1.1.2",
+    "@decky/ui": "^4.7.1",
+    "react-icons": "^5.2.1"
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "react",
+        "react-dom"
+      ]
+    }
+  }
+}
