@@ -20,7 +20,15 @@ no expone la elección de BSSID a NetworkManager, así que:
 - La lista de APs se obtiene directamente del driver con `iw` (NetworkManager solo enseña uno
   por SSID).
 - Para cambiar de AP se usa `iwctl debug <dev> roam <bssid>`, que **solo existe si iwd corre en
-  modo desarrollador**. Para activarlo, en la Deck (modo escritorio o SSH):
+  modo desarrollador**. El plugin ofrece un botón «Activar modo desarrollador de iwd» que crea el
+  drop-in `/etc/systemd/system/iwd.service.d/apdetail-developer.conf` y reinicia iwd; el mismo
+  botón pasa a «Revertir…» y deja iwd como estaba. Este modo solo expone comandos extra por D-Bus
+  (solo para root); no cambia el escaneo, el roaming ni el consumo.
+
+  Ojo: desinstalar el plugin **no** revierte el modo desarrollador (Decky también llama a
+  `_uninstall` al actualizar el plugin). Pulsa «Revertir» antes de desinstalar, o hazlo a mano:
+
+  Equivalente manual:
 
   ```bash
   sudo mkdir -p /etc/systemd/system/iwd.service.d

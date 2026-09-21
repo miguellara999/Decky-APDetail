@@ -121,6 +121,17 @@ class OuiDb:
 _oui = OuiDb()
 
 
+IWD_DROPIN_DIR = "/etc/systemd/system/iwd.service.d"
+IWD_DROPIN = os.path.join(IWD_DROPIN_DIR, "apdetail-developer.conf")
+IWD_DROPIN_CONTENT = """# Añadido por el plugin APDetail de Decky: arranca iwd en modo desarrollador
+# para poder cambiar de punto de acceso (iwctl debug <dev> roam <bssid>).
+# Se elimina desde el propio plugin o al desinstalarlo.
+[Service]
+ExecStart=
+ExecStart=/usr/lib/iwd/iwd --developer
+"""
+
+
 class Plugin:
     _backend: str | None = None
 
@@ -327,6 +338,7 @@ class Plugin:
             result["backend"] = backend
             if backend == "iwd":
                 result["iwd_dev_mode"] = await self._iwd_dev_mode(dev["device"])
+                result["iwd_dropin"] = os.path.exists(IWD_DROPIN)
                 result["pinned_bssid"] = ""
             else:
                 result["pinned_bssid"] = await self._pinned_bssid(dev["connection"])
@@ -425,6 +437,49 @@ class Plugin:
         decky.logger.info("Conectado a BSSID %s en %s", bssid, conn)
         return {"ok": True, "bssid": bssid, "connection": conn}
 
+    async def _restart_iwd_and_wait(self) -> dict[str, Any]:
+        rc, _, err = await _run("systemctl", "daemon-reload")
+        if rc != 0:
+            return {"ok": False, "error": err.strip() or "daemon-reload falló"}
+        rc, _, err = await _run("systemctl", "restart", "iwd", timeout=60)
+        if rc != 0:
+            return {"ok": False, "error": err.strip() or "No se pudo reiniciar iwd"}
+        # Esperar a que vuelva la conexión (hasta ~20 s)
+        for _ in range(40):
+            await asyncio.sleep(0.5)
+            dev = await self._wifi_device()
+            if dev and dev["state"].startswith("connected"):
+                return {"ok": True}
+        return {"ok": True, "warning": "iwd reiniciado; la conexión aún se está restableciendo"}
+
+    async def set_iwd_dev_mode(self, enable: bool) -> dict[str, Any]:
+        """Activa/revierte el modo desarrollador de iwd mediante un drop-in de
+        systemd y reinicia iwd (el WiFi se cae unos segundos y reconecta solo)."""
+        try:
+            if await self._wifi_backend() != "iwd":
+                return {"ok": False, "error": "El sistema no usa iwd"}
+            if enable:
+                os.makedirs(IWD_DROPIN_DIR, exist_ok=True)
+                with open(IWD_DROPIN, "w", encoding="utf-8") as f:
+                    f.write(IWD_DROPIN_CONTENT)
+                decky.logger.info("Drop-in creado: %s", IWD_DROPIN)
+            else:
+                if os.path.exists(IWD_DROPIN):
+                    os.remove(IWD_DROPIN)
+                    decky.logger.info("Drop-in eliminado: %s", IWD_DROPIN)
+                # Si el directorio queda vacío lo quitamos para dejarlo como estaba
+                try:
+                    os.rmdir(IWD_DROPIN_DIR)
+                except OSError:
+                    pass
+            result = await self._restart_iwd_and_wait()
+            if result["ok"]:
+                decky.logger.info("iwd reiniciado en modo %s", "desarrollador" if enable else "normal")
+            return result
+        except Exception as e:  # noqa: BLE001
+            decky.logger.exception("set_iwd_dev_mode")
+            return {"ok": False, "error": str(e)}
+
     async def clear_bssid(self) -> dict[str, Any]:
         """Quita el BSSID fijado del perfil actual (vuelve al roaming automático)."""
         try:
@@ -458,6 +513,11 @@ class Plugin:
         decky.logger.info("APDetail descargado")
 
     async def _uninstall(self):
+        # No revertimos aquí el modo desarrollador de iwd: Decky también llama a
+        # _uninstall al reinstalar/actualizar el plugin y reiniciaría el WiFi
+        # cada vez. Se revierte desde el botón del plugin.
+        if os.path.exists(IWD_DROPIN):
+            decky.logger.warning("Queda activo el modo desarrollador de iwd (%s)", IWD_DROPIN)
         decky.logger.info("APDetail desinstalado")
 
     async def _migration(self):

@@ -35,6 +35,7 @@ type Status = {
   pinned_bssid?: string;
   backend?: "iwd" | "wpa";
   iwd_dev_mode?: boolean;
+  iwd_dropin?: boolean; // el drop-in lo creó este plugin
 };
 
 type AccessPoint = {
@@ -58,7 +59,13 @@ type ScanResult = {
   all?: AccessPoint[];
 };
 
-type ActionResult = { ok: boolean; error?: string; bssid?: string; needs_dev_mode?: boolean };
+type ActionResult = {
+  ok: boolean;
+  error?: string;
+  warning?: string;
+  bssid?: string;
+  needs_dev_mode?: boolean;
+};
 
 // ---------------------------------------------------------------------------
 // Llamadas al backend
@@ -68,6 +75,7 @@ const getStatus = callable<[], Status>("get_status");
 const scan = callable<[rescan: boolean], ScanResult>("scan");
 const connectBssid = callable<[bssid: string], ActionResult>("connect_bssid");
 const clearBssid = callable<[], ActionResult>("clear_bssid");
+const setIwdDevMode = callable<[enable: boolean], ActionResult>("set_iwd_dev_mode");
 
 const REFRESH_MS = 10_000;
 
@@ -154,7 +162,29 @@ function Content() {
   };
 
   const pinned = !!status?.pinned_bssid;
-  const iwdNeedsDevMode = status?.backend === "iwd" && status.iwd_dev_mode === false;
+  const isIwd = status?.backend === "iwd";
+  const iwdDevMode = !!status?.iwd_dev_mode;
+  const iwdNeedsDevMode = isIwd && !iwdDevMode;
+  // Solo ofrecemos revertir si el modo desarrollador lo activó este plugin
+  const canRevertIwd = isIwd && iwdDevMode && !!status?.iwd_dropin;
+
+  const onToggleIwd = async () => {
+    const enable = !iwdDevMode;
+    setBusy("iwd");
+    try {
+      const r = await setIwdDevMode(enable);
+      toaster.toast({
+        title: "APDetail",
+        body: r.ok
+          ? r.warning ??
+            (enable ? "Modo desarrollador de iwd activado" : "iwd restaurado a su configuración por defecto")
+          : r.error ?? "Error",
+      });
+    } finally {
+      setBusy(null);
+      void refresh(false);
+    }
+  };
   const aps = showAll ? allAps : sameSsid;
   // Solo permitimos conectar a APs del SSID actual: fijar el BSSID de otra red
   // en el perfil activo dejaría la conexión inutilizable.
@@ -243,12 +273,24 @@ function Content() {
             {scanning ? "Escaneando…" : "Volver a escanear"}
           </ButtonItem>
         </PanelSectionRow>
-        {iwdNeedsDevMode && (
+        {(iwdNeedsDevMode || canRevertIwd) && (
           <PanelSectionRow>
-            <Field
-              label="Cambio de AP no disponible"
-              description="SteamOS usa iwd, que solo permite elegir AP en modo desarrollador. Consulta el README del plugin para activarlo."
-            />
+            <ButtonItem
+              layout="below"
+              disabled={busy !== null}
+              description={
+                iwdNeedsDevMode
+                  ? "SteamOS usa iwd, que solo permite elegir AP en modo desarrollador. Se reinicia iwd: el WiFi se corta unos segundos y reconecta solo."
+                  : "Elimina el ajuste añadido por el plugin y reinicia iwd con su configuración por defecto."
+              }
+              onClick={() => void onToggleIwd()}
+            >
+              {busy === "iwd"
+                ? "Reiniciando iwd…"
+                : iwdNeedsDevMode
+                  ? "Activar modo desarrollador de iwd"
+                  : "Revertir modo desarrollador de iwd"}
+            </ButtonItem>
           </PanelSectionRow>
         )}
         {pinned && (
