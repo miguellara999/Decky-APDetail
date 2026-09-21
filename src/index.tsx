@@ -6,7 +6,7 @@ import {
   staticClasses,
 } from "@decky/ui";
 import { callable, definePlugin, toaster } from "@decky/api";
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { FaWifi } from "react-icons/fa";
 
 // ---------------------------------------------------------------------------
