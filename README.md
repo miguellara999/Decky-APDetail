@@ -12,8 +12,34 @@ SSID. Útil en redes con varios puntos de acceso (mesh, repetidores) cuando la D
 - Permite conectarse a un AP concreto fijando su BSSID en el perfil de NetworkManager.
 - Permite quitar la fijación para volver al roaming automático.
 
-> Al fijar un BSSID, NetworkManager **no** cambiará de AP automáticamente aunque te alejes.
-> Usa «Quitar fijación» para volver al comportamiento normal.
+## SteamOS e iwd (importante)
+
+SteamOS (3.5+) usa **iwd** como backend WiFi de NetworkManager. iwd agrupa los APs por red y
+no expone la elección de BSSID a NetworkManager, así que:
+
+- La lista de APs se obtiene directamente del driver con `iw` (NetworkManager solo enseña uno
+  por SSID).
+- Para cambiar de AP se usa `iwctl debug <dev> roam <bssid>`, que **solo existe si iwd corre en
+  modo desarrollador**. Para activarlo, en la Deck (modo escritorio o SSH):
+
+  ```bash
+  sudo mkdir -p /etc/systemd/system/iwd.service.d
+  sudo tee /etc/systemd/system/iwd.service.d/apdetail-developer.conf >/dev/null <<'EOF'
+  [Service]
+  ExecStart=
+  ExecStart=/usr/lib/iwd/iwd --developer
+  EOF
+  sudo systemctl daemon-reload && sudo systemctl restart iwd
+  ```
+
+  El WiFi se cae unos segundos y reconecta solo. Para revertirlo, borra ese fichero y repite
+  `daemon-reload` + `restart iwd`.
+
+- Con iwd no hay "fijación": tras el cambio, iwd se queda en ese AP hasta que la señal baje de su
+  umbral de roaming (−70 dBm por defecto).
+
+En sistemas con wpa_supplicant (no SteamOS), el plugin fija `802-11-wireless.bssid` en el perfil
+de NetworkManager; en ese caso el AP queda fijado hasta pulsar «Quitar fijación».
 
 ## Desarrollo
 

@@ -122,6 +122,25 @@ _oui = OuiDb()
 
 
 class Plugin:
+    _backend: str | None = None
+
+    async def _wifi_backend(self) -> str:
+        """'iwd' si NetworkManager usa iwd (SteamOS >= 3.5), si no 'wpa'."""
+        if self._backend is None:
+            rc, out, _ = await _run("systemctl", "is-active", "iwd")
+            self._backend = "iwd" if rc == 0 and out.strip() == "active" else "wpa"
+            decky.logger.info("Backend WiFi: %s", self._backend)
+        return self._backend
+
+    async def _iwd_dev_mode(self, device: str) -> bool:
+        """True si iwd corre con --developer (existe la interfaz StationDebug)."""
+        rc, out, err = await _run("iwctl", "debug", device, "get-networks")
+        return rc == 0 and "not found" not in (out + err).lower()
+
+    async def _current_bssid(self, device: str) -> str:
+        link = await self._iw_link(device)
+        return link.get("bssid", "")
+
     async def _wifi_device(self) -> dict[str, str] | None:
         """Devuelve el primer dispositivo wifi: {device, state, connection}."""
         rc, out, err = await _run("nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev", "status")
@@ -304,7 +323,13 @@ class Plugin:
             result.update(link)
             if "freq" in link:
                 result["band"] = _band(link["freq"])
-            result["pinned_bssid"] = await self._pinned_bssid(dev["connection"])
+            backend = await self._wifi_backend()
+            result["backend"] = backend
+            if backend == "iwd":
+                result["iwd_dev_mode"] = await self._iwd_dev_mode(dev["device"])
+                result["pinned_bssid"] = ""
+            else:
+                result["pinned_bssid"] = await self._pinned_bssid(dev["connection"])
             result["ip4"] = await self._ip4(dev["device"])
             if "bssid" in result:
                 result["vendor"] = _oui.lookup(result["bssid"])
@@ -334,18 +359,19 @@ class Plugin:
             aps = await self._list_aps(dev["device"], rescan=rescan)
             current = next((a for a in aps if a["in_use"]), None)
             ssid = current["ssid"] if current else ""
-            return {
-                "ok": True,
-                "ssid": ssid,
-                "same_ssid": [a for a in aps if ssid and a["ssid"] == ssid],
-                "all": aps,
-            }
+            same = [a for a in aps if ssid and a["ssid"] == ssid]
+            decky.logger.info(
+                "scan(rescan=%s): ssid=%r total=%d same_ssid=%s",
+                rescan, ssid, len(aps), [(a["bssid"], a["signal"], a["source"]) for a in same],
+            )
+            return {"ok": True, "ssid": ssid, "same_ssid": same, "all": aps}
         except Exception as e:  # noqa: BLE001
             decky.logger.exception("scan")
             return {"ok": False, "error": str(e)}
 
     async def connect_bssid(self, bssid: str) -> dict[str, Any]:
-        """Fija el BSSID en el perfil de conexión actual y reconecta."""
+        """Cambia al AP indicado. Con iwd usa `iwctl debug roam`; con
+        wpa_supplicant fija el BSSID en el perfil de NetworkManager."""
         try:
             bssid = (bssid or "").strip().upper()
             if not re.fullmatch(r"([0-9A-F]{2}:){5}[0-9A-F]{2}", bssid):
@@ -353,25 +379,57 @@ class Plugin:
             dev = await self._wifi_device()
             if dev is None or not dev["connection"]:
                 return {"ok": False, "error": "No hay una conexión WiFi activa"}
-            conn = dev["connection"]
-            rc, _, err = await _run("nmcli", "connection", "modify", conn, "802-11-wireless.bssid", bssid)
-            if rc != 0:
-                return {"ok": False, "error": err.strip() or "No se pudo modificar la conexión"}
-            rc, _, err = await _run("nmcli", "connection", "up", conn, "ifname", dev["device"], timeout=60)
-            if rc != 0:
-                # Revertimos el pin para no dejar la conexión inutilizable
-                await _run("nmcli", "connection", "modify", conn, "802-11-wireless.bssid", "")
-                await _run("nmcli", "connection", "up", conn, "ifname", dev["device"], timeout=60)
-                return {"ok": False, "error": err.strip() or "No se pudo conectar al AP; se ha revertido"}
-            decky.logger.info("Conectado a BSSID %s en %s", bssid, conn)
-            return {"ok": True, "bssid": bssid, "connection": conn}
+            if await self._wifi_backend() == "iwd":
+                return await self._connect_bssid_iwd(dev["device"], bssid)
+            return await self._connect_bssid_nm(dev["device"], dev["connection"], bssid)
         except Exception as e:  # noqa: BLE001
             decky.logger.exception("connect_bssid")
             return {"ok": False, "error": str(e)}
 
+    async def _connect_bssid_iwd(self, device: str, bssid: str) -> dict[str, Any]:
+        if not await self._iwd_dev_mode(device):
+            return {
+                "ok": False,
+                "needs_dev_mode": True,
+                "error": "iwd no está en modo desarrollador (ver README)",
+            }
+        before = await self._current_bssid(device)
+        if before == bssid:
+            return {"ok": True, "bssid": bssid, "unchanged": True}
+        # roam = reasociación rápida sin perder la conexión; connect = reconexión completa
+        rc, out, err = await _run("iwctl", "debug", device, "roam", bssid.lower(), timeout=30)
+        if rc != 0:
+            decky.logger.warning("iwctl roam falló (%s %s); probando connect", out.strip(), err.strip())
+            rc, out, err = await _run("iwctl", "debug", device, "connect", bssid.lower(), timeout=60)
+            if rc != 0:
+                return {"ok": False, "error": (out + err).strip() or "iwctl no pudo cambiar de AP"}
+        # Esperamos a que el driver refleje el cambio
+        for _ in range(20):
+            await asyncio.sleep(0.5)
+            if await self._current_bssid(device) == bssid:
+                decky.logger.info("Roam OK: %s -> %s", before, bssid)
+                return {"ok": True, "bssid": bssid}
+        now = await self._current_bssid(device)
+        return {"ok": False, "error": f"iwd no cambió de AP (sigue en {now or 'desconocido'})"}
+
+    async def _connect_bssid_nm(self, device: str, conn: str, bssid: str) -> dict[str, Any]:
+        rc, _, err = await _run("nmcli", "connection", "modify", conn, "802-11-wireless.bssid", bssid)
+        if rc != 0:
+            return {"ok": False, "error": err.strip() or "No se pudo modificar la conexión"}
+        rc, _, err = await _run("nmcli", "connection", "up", conn, "ifname", device, timeout=60)
+        if rc != 0:
+            # Revertimos el pin para no dejar la conexión inutilizable
+            await _run("nmcli", "connection", "modify", conn, "802-11-wireless.bssid", "")
+            await _run("nmcli", "connection", "up", conn, "ifname", device, timeout=60)
+            return {"ok": False, "error": err.strip() or "No se pudo conectar al AP; se ha revertido"}
+        decky.logger.info("Conectado a BSSID %s en %s", bssid, conn)
+        return {"ok": True, "bssid": bssid, "connection": conn}
+
     async def clear_bssid(self) -> dict[str, Any]:
         """Quita el BSSID fijado del perfil actual (vuelve al roaming automático)."""
         try:
+            if await self._wifi_backend() == "iwd":
+                return {"ok": False, "error": "Con iwd no hay BSSID fijado"}
             dev = await self._wifi_device()
             if dev is None or not dev["connection"]:
                 return {"ok": False, "error": "No hay una conexión WiFi activa"}

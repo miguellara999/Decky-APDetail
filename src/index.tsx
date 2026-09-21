@@ -33,6 +33,8 @@ type Status = {
   rx_bitrate?: number;
   ip4?: string;
   pinned_bssid?: string;
+  backend?: "iwd" | "wpa";
+  iwd_dev_mode?: boolean;
 };
 
 type AccessPoint = {
@@ -56,7 +58,7 @@ type ScanResult = {
   all?: AccessPoint[];
 };
 
-type ActionResult = { ok: boolean; error?: string; bssid?: string };
+type ActionResult = { ok: boolean; error?: string; bssid?: string; needs_dev_mode?: boolean };
 
 // ---------------------------------------------------------------------------
 // Llamadas al backend
@@ -152,6 +154,7 @@ function Content() {
   };
 
   const pinned = !!status?.pinned_bssid;
+  const iwdNeedsDevMode = status?.backend === "iwd" && status.iwd_dev_mode === false;
   const aps = showAll ? allAps : sameSsid;
   // Solo permitimos conectar a APs del SSID actual: fijar el BSSID de otra red
   // en el perfil activo dejaría la conexión inutilizable.
@@ -185,7 +188,15 @@ function Content() {
             <PanelSectionRow>
               <Field
                 label="Punto de acceso"
-                description={pinned ? "BSSID fijado en el perfil" : "Roaming automático"}
+                description={
+                  status.backend === "iwd"
+                    ? status.iwd_dev_mode
+                      ? "iwd · cambio de AP disponible"
+                      : "iwd · modo desarrollador desactivado"
+                    : pinned
+                      ? "BSSID fijado en el perfil"
+                      : "Roaming automático"
+                }
                 focusable
               >
                 {status.bssid ?? "?"}
@@ -232,6 +243,14 @@ function Content() {
             {scanning ? "Escaneando…" : "Volver a escanear"}
           </ButtonItem>
         </PanelSectionRow>
+        {iwdNeedsDevMode && (
+          <PanelSectionRow>
+            <Field
+              label="Cambio de AP no disponible"
+              description="SteamOS usa iwd, que solo permite elegir AP en modo desarrollador. Consulta el README del plugin para activarlo."
+            />
+          </PanelSectionRow>
+        )}
         {pinned && (
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy !== null} onClick={() => void onClear()}>
