@@ -64,6 +64,22 @@ def _band(freq_mhz: int) -> str:
     return "6 GHz"
 
 
+def _dbm_to_percent(dbm: float) -> int:
+    return max(0, min(100, int(round((dbm + 100) * 2))))
+
+
+def _freq_to_chan(freq: int) -> int:
+    if 2412 <= freq <= 2472:
+        return (freq - 2407) // 5
+    if freq == 2484:
+        return 14
+    if 5000 <= freq < 5900:
+        return (freq - 5000) // 5
+    if 5955 <= freq <= 7115:
+        return (freq - 5950) // 5
+    return 0
+
+
 def _to_int(value: str) -> int:
     m = re.search(r"-?\d+", value or "")
     return int(m.group(0)) if m else 0
@@ -148,7 +164,85 @@ class Plugin:
         rc, out, _ = await _run("nmcli", "-g", "IP4.ADDRESS", "dev", "show", device)
         return out.strip().split("\n")[0] if rc == 0 else ""
 
+    async def _iw_scan(self, device: str, rescan: bool) -> list[dict[str, Any]]:
+        """Escaneo directo al driver. `scan` fuerza un escaneo nuevo; si el
+        dispositivo está ocupado (p.ej. NM escaneando) caemos a `scan dump`."""
+        out = ""
+        if rescan:
+            rc, out, err = await _run("iw", "dev", device, "scan", timeout=40)
+            if rc != 0:
+                decky.logger.warning("iw scan falló (%s); usando scan dump", err.strip())
+                out = ""
+        if not out:
+            rc, out, _ = await _run("iw", "dev", device, "scan", "dump")
+            if rc != 0:
+                return []
+
+        aps: list[dict[str, Any]] = []
+        cur: dict[str, Any] | None = None
+        for line in out.splitlines():
+            m = re.match(r"BSS ([0-9a-f:]{17})\(on \S+\)(.*)", line)
+            if m:
+                cur = {
+                    "in_use": "associated" in m.group(2),
+                    "bssid": m.group(1).upper(),
+                    "ssid": "",
+                    "signal": 0,
+                    "freq": 0,
+                    "chan": 0,
+                    "rate": 0,
+                    "security": "",
+                    "source": "iw",
+                }
+                aps.append(cur)
+                continue
+            if cur is None:
+                continue
+            t = line.strip()
+            if t.startswith("freq:"):
+                cur["freq"] = int(float(t.split(":", 1)[1]))
+            elif t.startswith("signal:"):
+                m = re.search(r"(-?[\d.]+)\s*dBm", t)
+                if m:
+                    cur["signal_dbm"] = float(m.group(1))
+                    cur["signal"] = _dbm_to_percent(float(m.group(1)))
+            elif t.startswith("SSID:"):
+                cur["ssid"] = t[5:].strip()
+            elif t.startswith("DS Parameter set: channel"):
+                cur["chan"] = _to_int(t)
+            elif t.startswith("* primary channel:"):
+                cur["chan"] = _to_int(t)
+            elif t.startswith("RSN:"):
+                cur["security"] = cur["security"] or "WPA2"
+            elif t.startswith("WPA:"):
+                cur["security"] = cur["security"] or "WPA1"
+        for ap in aps:
+            if not ap["chan"]:
+                ap["chan"] = _freq_to_chan(ap["freq"])
+            ap["band"] = _band(ap["freq"])
+            ap["vendor"] = _oui.lookup(ap["bssid"])
+            # El SSID oculto lo muestra iw como "\x00\x00..."
+            if re.fullmatch(r"(\\x00)+", ap["ssid"]):
+                ap["ssid"] = ""
+        return aps
+
     async def _list_aps(self, device: str, rescan: bool) -> list[dict[str, Any]]:
+        """Fusiona la lista de NetworkManager con la del driver (iw)."""
+        nm_aps = await self._list_aps_nm(device, rescan)
+        try:
+            iw_aps = await self._iw_scan(device, rescan)
+        except Exception:  # noqa: BLE001
+            decky.logger.exception("iw scan")
+            iw_aps = []
+        seen = {a["bssid"] for a in nm_aps}
+        extra = [a for a in iw_aps if a["bssid"] not in seen]
+        if extra:
+            decky.logger.info("iw aporta %d APs que NM no listaba: %s", len(extra), [a["bssid"] for a in extra])
+        aps = nm_aps + extra
+        aps.sort(key=lambda a: (not a["in_use"], -a["signal"]))
+        return aps
+
+    async def _list_aps_nm(self, device: str, rescan: bool) -> list[dict[str, Any]]:
         rc, out, err = await _run(
             "nmcli", "-t",
             "-f", "IN-USE,BSSID,SSID,SIGNAL,FREQ,CHAN,RATE,SECURITY",
@@ -160,7 +254,7 @@ class Plugin:
             # NetworkManager limita la frecuencia de escaneo; si lo rechaza,
             # devolvemos la caché en lugar de fallar.
             decky.logger.warning("Rescan rechazado (%s); usando caché", err.strip())
-            return await self._list_aps(device, rescan=False)
+            return await self._list_aps_nm(device, rescan=False)
         if rc != 0:
             raise RuntimeError(err.strip() or "nmcli dev wifi list falló")
         aps: list[dict[str, Any]] = []
@@ -181,8 +275,8 @@ class Plugin:
                 "chan": _to_int(chan),
                 "rate": _to_int(rate),
                 "security": security,
+                "source": "nm",
             })
-        aps.sort(key=lambda a: (not a["in_use"], -a["signal"]))
         return aps
 
     # ---------------------------------------------------------------------

@@ -265,14 +265,13 @@ function Content() {
               layout="below"
               disabled={busy !== null || ap.in_use || (showAll && !isSameNetwork(ap))}
               description={
-                (showAll ? `${ap.ssid || "(SSID oculto)"} · ` : "") +
+                (ap.vendor ? `${ap.vendor} · ` : "") +
                 `${ap.bssid} · ${ap.band} · canal ${ap.chan} · ${ap.signal}% ${signalBars(ap.signal)}`
               }
               onClick={() => void onConnect(ap)}
             >
               {ap.in_use ? "● " : ""}
-              {ap.vendor ? `${ap.vendor} · ` : ""}
-              {shortBssid(ap.bssid)}
+              {ap.ssid || "(SSID oculto)"}
               {busy === ap.bssid ? "  (conectando…)" : ap.in_use ? "  (en uso)" : ""}
             </ButtonItem>
           </PanelSectionRow>
