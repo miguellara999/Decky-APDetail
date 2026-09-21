@@ -73,6 +73,10 @@ DECK_HOST=deck@steamdeck ./scripts/deploy.sh
 
 Luego en la Deck: Decky > ⚙ > Desarrollador > «Instalar plugin desde zip».
 
+## Documentación técnica
+
+Ver [DESARROLLO.md](DESARROLLO.md) para arquitectura, decisiones y depuración.
+
 ## Cómo funciona
 
 - **Backend** (`main.py`): usa `nmcli` para listar APs y modificar el perfil de conexión
