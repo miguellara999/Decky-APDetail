@@ -118,6 +118,11 @@ class Plugin:
             "--rescan", "yes" if rescan else "no",
             timeout=40,
         )
+        if rc != 0 and rescan:
+            # NetworkManager limita la frecuencia de escaneo; si lo rechaza,
+            # devolvemos la caché en lugar de fallar.
+            decky.logger.warning("Rescan rechazado (%s); usando caché", err.strip())
+            return await self._list_aps(device, rescan=False)
         if rc != 0:
             raise RuntimeError(err.strip() or "nmcli dev wifi list falló")
         aps: list[dict[str, Any]] = []

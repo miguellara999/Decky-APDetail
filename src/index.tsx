@@ -3,6 +3,7 @@ import {
   Field,
   PanelSection,
   PanelSectionRow,
+  ToggleField,
   staticClasses,
 } from "@decky/ui";
 import { callable, definePlugin, toaster } from "@decky/api";
@@ -89,7 +90,9 @@ function shortBssid(bssid: string): string {
 
 function Content() {
   const [status, setStatus] = useState<Status | null>(null);
-  const [aps, setAps] = useState<AccessPoint[]>([]);
+  const [sameSsid, setSameSsid] = useState<AccessPoint[]>([]);
+  const [allAps, setAllAps] = useState<AccessPoint[]>([]);
+  const [showAll, setShowAll] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
 
@@ -99,8 +102,12 @@ function Content() {
       const s = await getStatus();
       setStatus(s);
       const r = await scan(rescan);
-      if (r.ok) setAps(r.same_ssid ?? []);
-      else if (rescan) toaster.toast({ title: "APDetail", body: r.error ?? "Error al escanear" });
+      if (r.ok) {
+        setSameSsid(r.same_ssid ?? []);
+        setAllAps(r.all ?? []);
+      } else if (rescan) {
+        toaster.toast({ title: "APDetail", body: r.error ?? "Error al escanear" });
+      }
     } catch (e) {
       setStatus({ ok: false, error: String(e) });
     } finally {
@@ -109,7 +116,7 @@ function Content() {
   }, []);
 
   useEffect(() => {
-    void refresh(false);
+    void refresh(true);
     const id = setInterval(() => void refresh(false), REFRESH_MS);
     return () => clearInterval(id);
   }, [refresh]);
@@ -143,6 +150,10 @@ function Content() {
   };
 
   const pinned = !!status?.pinned_bssid;
+  const aps = showAll ? allAps : sameSsid;
+  // Solo permitimos conectar a APs del SSID actual: fijar el BSSID de otra red
+  // en el perfil activo dejaría la conexión inutilizable.
+  const isSameNetwork = (ap: AccessPoint) => !!status?.ssid && ap.ssid === status.ssid;
 
   return (
     <>
@@ -223,7 +234,19 @@ function Content() {
         )}
       </PanelSection>
 
-      <PanelSection title={status?.ssid ? `Puntos de acceso de "${status.ssid}"` : "Puntos de acceso"}>
+      <PanelSection
+        title={
+          showAll ? "Todas las redes" : status?.ssid ? `Puntos de acceso de "${status.ssid}"` : "Puntos de acceso"
+        }
+      >
+        <PanelSectionRow>
+          <ToggleField
+            label="Mostrar todas las redes"
+            description="Incluye otros SSID y redes ocultas"
+            checked={showAll}
+            onChange={setShowAll}
+          />
+        </PanelSectionRow>
         {aps.length === 0 && (
           <PanelSectionRow>
             <Field label="No se han encontrado otros APs" description="Pulsa «Volver a escanear»" />
@@ -233,8 +256,11 @@ function Content() {
           <PanelSectionRow key={ap.bssid}>
             <ButtonItem
               layout="below"
-              disabled={busy !== null || ap.in_use}
-              description={`${ap.band} · canal ${ap.chan} · ${ap.signal}% ${signalBars(ap.signal)}`}
+              disabled={busy !== null || ap.in_use || (showAll && !isSameNetwork(ap))}
+              description={
+                (showAll ? `${ap.ssid || "(SSID oculto)"} · ` : "") +
+                `${ap.band} · canal ${ap.chan} · ${ap.signal}% ${signalBars(ap.signal)}`
+              }
               onClick={() => void onConnect(ap)}
             >
               {ap.in_use ? "● " : ""}
