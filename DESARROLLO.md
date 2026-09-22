@@ -112,9 +112,18 @@ Ahora:
   (iwd solo lo hace si la señal baja), así que los otros APs "desaparecían" a los 30 s. El
   backend recuerda cada AP con su última medición y lo devuelve con `stale: true` y `age_ms`
   actualizado hasta que pase el TTL. La UI lo muestra como "visto hace N s".
-- **Frontend**: al abrir, primero `scan(false)` (caché, instantáneo) y después `scan(true)` en
-  segundo plano; luego refresco cada 10 s y escaneo real cada 3 refrescos (30 s) mientras el
-  panel está abierto.
+- **Escaneo dirigido** (`scan(rescan=True, quick=True)`): un escaneo WiFi es por *canal*, no
+  por SSID (la radio visita cada canal y escucha/pregunta), y el coste es el tiempo fuera del
+  canal propio. Como ya sabemos en qué frecuencias están los APs del SSID actual
+  (`_known_freqs_for_ssid`, de la memoria), los refrescos periódicos escanean solo esas
+  (~100 ms/canal) con `StationDebug.Scan(aq)` vía
+  `busctl call net.connman.iwd <path> net.connman.iwd.StationDebug Scan aq N f1 f2…`
+  (o `iw scan freq …` con wpa). Sin modo desarrollador o sin memoria cae al escaneo completo.
+  Nota: en escaneo dirigido no se pide `--rescan yes` a NM.
+- **Frontend**: al abrir, primero `scan(false)` (caché, instantáneo) y después `scan(true)`
+  completo en segundo plano; luego refresco cada 10 s y escaneo **dirigido** cada 3 refrescos
+  (30 s) mientras el panel está abierto. El botón «Volver a escanear» siempre hace uno completo
+  (para descubrir APs en canales nuevos).
 
 Sobre la fiabilidad en general: el RSSI oscila ±3-5 dB por ruido/multipath incluso quieto;
 diferencias menores de ~6 dB no significan nada. Comparar siempre en dBm, no en %.
@@ -251,6 +260,7 @@ funciona (Decky desinstala e instala).
 7. Revertir al desinstalar sin romper las actualizaciones: timer transitorio de systemd + marca.
 8. La señal "se invertía" al cambiar de AP → fuentes/escalas mezcladas. dBm del driver para todos,
    en vivo para el AP en uso, % con la fórmula de NM, antigüedad visible y escaneo vía iwd.
+9. Escaneos periódicos dirigidos solo a las frecuencias conocidas del SSID (StationDebug.Scan).
 
 ## 9. Ideas para más adelante
 

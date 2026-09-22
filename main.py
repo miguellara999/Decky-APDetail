@@ -292,31 +292,58 @@ class Plugin:
         rc, out, _ = await _run("nmcli", "-g", "IP4.ADDRESS", "dev", "show", device)
         return out.strip().split("\n")[0] if rc == 0 else ""
 
-    async def _trigger_scan(self, device: str) -> None:
-        """Fuerza un escaneo nuevo. Con iwd se lo pedimos a él (es el dueño del
-        dispositivo; `iw scan` directo suele fallar con 'Device or resource busy')
-        y esperamos a que termine. Con wpa_supplicant usamos `iw scan`."""
+    async def _wait_iwd_scan_done(self, device: str, max_s: float) -> None:
+        for _ in range(int(max_s * 4)):
+            await asyncio.sleep(0.25)
+            rc, out, _ = await _run("iwctl", "station", device, "show")
+            if rc != 0 or re.search(r"Scanning\s+no", _ANSI.sub("", out)):
+                return
+        decky.logger.warning("iwd sigue escaneando tras %.0f s; usamos lo que haya", max_s)
+
+    async def _trigger_scan(self, device: str, freqs: list[int] | None = None) -> None:
+        """Fuerza un escaneo nuevo. Si se pasan `freqs` (MHz) se escanean solo
+        esos canales: ~100 ms por canal frente a varios segundos de un escaneo
+        completo, y casi sin cortar la conexión.
+
+        Con iwd se lo pedimos a él (es el dueño del dispositivo; `iw scan`
+        directo suele fallar con 'Device or resource busy'). El escaneo por
+        frecuencias usa StationDebug.Scan (modo desarrollador); si no está,
+        cae al escaneo completo. Con wpa_supplicant usamos `iw scan`."""
         if await self._wifi_backend() == "iwd":
+            if freqs:
+                path = await self._find_iwd_station_path()
+                if path:
+                    rc, _, err = await _run(
+                        "busctl", "call", "net.connman.iwd", path, "net.connman.iwd.StationDebug",
+                        "Scan", "aq", str(len(freqs)), *[str(f) for f in freqs],
+                    )
+                    if rc == 0:
+                        await self._wait_iwd_scan_done(device, 5)
+                        return
+                    decky.logger.warning("StationDebug.Scan falló (%s); escaneo completo", err.strip())
             rc, _, err = await _run("iwctl", "station", device, "scan")
             if rc != 0:
                 decky.logger.warning("iwctl scan falló: %s", err.strip())
                 return
-            for _ in range(20):  # hasta 10 s
-                await asyncio.sleep(0.5)
-                rc, out, _ = await _run("iwctl", "station", device, "show")
-                if rc != 0 or re.search(r"Scanning\s+no", _ANSI.sub("", out)):
-                    return
-            decky.logger.warning("iwd sigue escaneando tras 10 s; usamos lo que haya")
+            await self._wait_iwd_scan_done(device, 10)
         else:
-            rc, _, err = await _run("iw", "dev", device, "scan", timeout=40)
+            args = ["iw", "dev", device, "scan"]
+            if freqs:
+                args += ["freq", *[str(f) for f in freqs]]
+            rc, _, err = await _run(*args, timeout=40)
             if rc != 0:
                 decky.logger.warning("iw scan falló (%s); usando scan dump", err.strip())
 
-    async def _iw_scan(self, device: str, rescan: bool) -> list[dict[str, Any]]:
+    def _known_freqs_for_ssid(self, ssid: str) -> list[int]:
+        """Frecuencias donde hemos visto APs de este SSID (memoria reciente)."""
+        freqs = {ap["freq"] for _, ap in self._ap_cache.values() if ap["ssid"] == ssid and ap["freq"]}
+        return sorted(freqs)
+
+    async def _iw_scan(self, device: str, rescan: bool, freqs: list[int] | None = None) -> list[dict[str, Any]]:
         """Lista de BSS del driver (`iw scan dump`), tras forzar un escaneo si
         se pide. Cada entrada lleva `signal_dbm` y `age_ms` (antigüedad)."""
         if rescan:
-            await self._trigger_scan(device)
+            await self._trigger_scan(device, freqs)
         rc, out, _ = await _run("iw", "dev", device, "scan", "dump")
         if rc != 0:
             return []
@@ -371,11 +398,12 @@ class Plugin:
                 ap["ssid"] = ""
         return aps
 
-    async def _list_aps(self, device: str, rescan: bool) -> list[dict[str, Any]]:
-        """Fusiona la lista de NetworkManager con la del driver (iw)."""
-        nm_aps = await self._list_aps_nm(device, rescan)
+    async def _list_aps(self, device: str, rescan: bool, freqs: list[int] | None = None) -> list[dict[str, Any]]:
+        """Fusiona la lista de NetworkManager con la del driver (iw). Con `freqs`
+        el escaneo es dirigido (solo esos canales) y no se pide rescan a NM."""
+        nm_aps = await self._list_aps_nm(device, rescan and not freqs)
         try:
-            iw_aps = await self._iw_scan(device, rescan)
+            iw_aps = await self._iw_scan(device, rescan, freqs)
         except Exception:  # noqa: BLE001
             decky.logger.exception("iw scan")
             iw_aps = []
@@ -512,19 +540,32 @@ class Plugin:
             decky.logger.exception("get_status")
             return {"ok": False, "error": str(e)}
 
-    async def scan(self, rescan: bool = True) -> dict[str, Any]:
-        """Lista los APs visibles. `same_ssid` contiene solo los del SSID actual."""
+    async def scan(self, rescan: bool = True, quick: bool = False) -> dict[str, Any]:
+        """Lista los APs visibles. `same_ssid` contiene solo los del SSID actual.
+        `quick`: escaneo dirigido solo a los canales donde ya hemos visto APs del
+        SSID actual (mucho más rápido y sin apenas cortar la conexión)."""
         try:
             dev = await self._wifi_device()
             if dev is None:
                 return {"ok": False, "error": "No se encontró un dispositivo WiFi"}
-            aps = await self._list_aps(dev["device"], rescan=rescan)
+            freqs: list[int] | None = None
+            if rescan and quick:
+                cur_ssid = next(
+                    (ap["ssid"] for _, ap in self._ap_cache.values() if ap.get("in_use")), ""
+                )
+                link = await self._iw_link(dev["device"])
+                freqs = self._known_freqs_for_ssid(cur_ssid) if cur_ssid else []
+                if link.get("freq") and link["freq"] not in freqs:
+                    freqs.append(link["freq"])
+                if not freqs:
+                    freqs = None  # sin memoria todavía: escaneo completo
+            aps = await self._list_aps(dev["device"], rescan=rescan, freqs=freqs)
             current = next((a for a in aps if a["in_use"]), None)
             ssid = current["ssid"] if current else ""
             same = [a for a in aps if ssid and a["ssid"] == ssid]
             decky.logger.info(
-                "scan(rescan=%s): ssid=%r total=%d same_ssid=%s",
-                rescan, ssid, len(aps), [(a["bssid"], a["signal"], a["source"]) for a in same],
+                "scan(rescan=%s, freqs=%s): ssid=%r total=%d same_ssid=%s",
+                rescan, freqs, ssid, len(aps), [(a["bssid"], a["signal_dbm"] if "signal_dbm" in a else a["signal"], a["source"]) for a in same],
             )
             return {"ok": True, "ssid": ssid, "same_ssid": same, "all": aps}
         except Exception as e:  # noqa: BLE001

@@ -76,13 +76,13 @@ type ActionResult = {
 // ---------------------------------------------------------------------------
 
 const getStatus = callable<[], Status>("get_status");
-const scan = callable<[rescan: boolean], ScanResult>("scan");
+const scan = callable<[rescan: boolean, quick: boolean], ScanResult>("scan");
 const connectBssid = callable<[bssid: string], ActionResult>("connect_bssid");
 const clearBssid = callable<[], ActionResult>("clear_bssid");
 const setIwdDevMode = callable<[enable: boolean], ActionResult>("set_iwd_dev_mode");
 
 const REFRESH_MS = 10_000;
-// Cada N refrescos hacemos un escaneo real (el kernel caduca los APs no oídos en 30 s)
+// Cada N refrescos hacemos un escaneo dirigido (el kernel caduca los APs no oídos en 30 s)
 const RESCAN_EVERY = 3;
 
 // ---------------------------------------------------------------------------
@@ -127,12 +127,14 @@ function Content() {
   const [busy, setBusy] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
 
-  const refresh = useCallback(async (rescan: boolean) => {
-    if (rescan) setScanning(true);
+  // rescan: forzar escaneo. quick: solo los canales donde ya hay APs de mi SSID
+  // (rápido, sin cortar la conexión); false = escaneo completo para descubrir.
+  const refresh = useCallback(async (rescan: boolean, quick = false) => {
+    if (rescan && !quick) setScanning(true);
     try {
       const s = await getStatus();
       setStatus(s);
-      const r = await scan(rescan);
+      const r = await scan(rescan, quick);
       if (r.ok) {
         setSameSsid(r.same_ssid ?? []);
         setAllAps(r.all ?? []);
@@ -142,7 +144,7 @@ function Content() {
     } catch (e) {
       setStatus({ ok: false, error: String(e) });
     } finally {
-      if (rescan) setScanning(false);
+      if (rescan && !quick) setScanning(false);
     }
   }, []);
 
@@ -152,7 +154,7 @@ function Content() {
     let tick = 0;
     const id = setInterval(() => {
       tick += 1;
-      void refresh(tick % RESCAN_EVERY === 0);
+      void refresh(tick % RESCAN_EVERY === 0, true);
     }, REFRESH_MS);
     return () => clearInterval(id);
   }, [refresh]);
