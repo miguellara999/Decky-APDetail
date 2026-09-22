@@ -297,6 +297,10 @@ class Plugin:
             await asyncio.sleep(0.25)
             rc, out, _ = await _run("iwctl", "station", device, "show")
             if rc != 0 or re.search(r"Scanning\s+no", _ANSI.sub("", out)):
+                # Margen para que el kernel termine de volcar los resultados del
+                # último tramo (iwd escanea por segmentos); sin esto el primer
+                # `scan dump` tras un escaneo completo venía incompleto.
+                await asyncio.sleep(0.75)
                 return
         decky.logger.warning("iwd sigue escaneando tras %.0f s; usamos lo que haya", max_s)
 

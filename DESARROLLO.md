@@ -111,7 +111,9 @@ Ahora:
 - **Antigüedad** (`age_ms`, de `last seen: N ms ago`) mostrada como "hace N s" si supera 3 s.
 - **Escaneo real vía iwd** (`_trigger_scan`): `iwctl station <dev> scan` y espera a que
   `iwctl station <dev> show` diga `Scanning no` (máx. 10 s; la salida puede llevar códigos ANSI,
-  se limpian con `_ANSI`). Con wpa_supplicant se sigue usando `iw scan`.
+  se limpian con `_ANSI`) más 0,75 s de margen: iwd escanea por segmentos y sin la espera el
+  primer `scan dump` venía incompleto (5 BSS en vez de 11, sin el segundo AP). Con
+  wpa_supplicant se sigue usando `iw scan`.
 
 - **Memoria de APs** (`_ap_cache`, TTL 180 s): el kernel (cfg80211) caduca los BSS que lleva
   más de 30 s sin oír, y lo hace justo al hacer `scan dump`; estando conectado nadie escanea
@@ -207,9 +209,10 @@ Decisiones:
   Test de esta lógica con stubs: `.devtest/uninstall_test.py`.
 - El drop-in vive en `/etc`, que en SteamOS persiste entre actualizaciones del sistema.
 
-Pendiente de comprobar: el `ExecStart` original de iwd en SteamOS se sobrescribió con la ruta de
-Arch (`/usr/lib/iwd/iwd`) sin haber visto el unit de la Deck. Funciona, pero si en algún momento
-falla, mirar `systemctl cat iwd` en la Deck y copiar los argumentos originales al drop-in.
+Verificado con `systemctl cat iwd` en la Deck (2026-09-22): el unit de SteamOS es el de Arch,
+`ExecStart=/usr/lib/iwd/iwd` sin argumentos, así que el drop-in es equivalente + `--developer`.
+El resto del unit (sandboxing, `StateDirectory=iwd`, etc.) se conserva porque solo se sobrescribe
+`ExecStart`.
 
 ## 6. Frontend (`src/index.tsx`)
 
@@ -283,5 +286,4 @@ funciona (Decky desinstala e instala).
 - Auto-roam opcional: si otro AP del mismo SSID supera al actual en X dB durante N segundos,
   cambiar solo. Cuidado con el ping-pong.
 - Mostrar el estado del modo desarrollador de iwd también cuando no hay conexión WiFi.
-- Verificar el `ExecStart` original de iwd en SteamOS y reflejarlo en el drop-in.
 - Traducción (ahora todo está en castellano fijo).
