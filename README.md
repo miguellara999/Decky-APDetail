@@ -105,4 +105,4 @@ Ver [DESARROLLO.md](DESARROLLO.md) para arquitectura, decisiones y depuración.
   señal en vivo, `iwctl`/`busctl` (API `StationDebug` de iwd) para cambiar de AP, escanear canales
   concretos y mantener el autoconnect. Fabricante por base OUI del IEEE embebida (offline).
 - **Frontend** (`src/index.tsx`): React + `@decky/ui`.
-- Probado en SteamOS 3.7 (iwd) con una red de dos APs (devolo + MikroTik) en el mismo SSID.
+- Probado en SteamOS (backend iwd) con una red de dos APs (devolo + MikroTik) en el mismo SSID.
