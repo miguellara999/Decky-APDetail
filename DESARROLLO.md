@@ -110,9 +110,23 @@ executor para no bloquear. Regenerar: `python3 scripts/build-oui.py`.
 
 ## 5. iwd y el modo desarrollador (lo más delicado)
 
-`iwctl debug …` solo existe si iwd arranca con `--developer` (`-E`). Ese flag únicamente
-registra interfaces D-Bus extra (`StationDebug`: roam, connect, get-networks, autoconnect),
-restringidas a root. No cambia escaneo, roaming, logging ni consumo.
+`iwctl debug …` solo existe si iwd arranca con `--developer` (`-E`). Ese flag registra
+interfaces D-Bus extra (`StationDebug`: roam, connect, get-networks, autoconnect), restringidas a
+root, y tiene **un efecto secundario importante**: en `station_create()` (`src/station.c`) iwd
+pone `autoconnect = false` cuando está en modo desarrollador. Consecuencia: tras suspender la Deck
+(o tras reiniciar iwd) no reconecta sola; hay que entrar al menú WiFi y elegir la red (sin clave).
+
+Mitigación (`_autoconnect_watchdog`, tarea asyncio creada en `_main` y cancelada en `_unload`):
+cada 4 s lee la propiedad `AutoConnect` de `net.connman.iwd.StationDebug` con
+`busctl get-property net.connman.iwd /net/connman/iwd/<phy>/<ifindex> …` y, si está a `false`,
+la pone a `true` con `busctl set-property … AutoConnect b true`. El object path se descubre con
+`busctl tree net.connman.iwd --list` y se invalida si falla la lectura (la estación se recrea
+tras suspender). Sin modo desarrollador la propiedad no existe y el bucle duerme 15 s.
+`set_iwd_dev_mode(True)` también activa `AutoConnect` justo tras reiniciar iwd.
+Escaneo, roaming, logging y consumo no cambian.
+
+Fuente consultada: mirror de iwd en GitHub (`kernelorg-mirror/network_wireless_iwd`),
+`src/station.c` y `doc/station-debug-api.txt` (git.kernel.org bloquea las descargas automáticas).
 
 El plugin lo activa/revierte con `set_iwd_dev_mode(enable)`:
 
@@ -171,6 +185,8 @@ iwctl station wlan0 show
 iwctl station wlan0 get-bsses "<SSID>"                # BSS por red, según iwd
 iwctl debug wlan0 get-networks                        # falla si no hay modo desarrollador
 systemctl cat iwd                                     # unit + drop-in
+busctl tree net.connman.iwd --list                    # object path de la estación (/net/connman/iwd/N/M)
+busctl get-property net.connman.iwd /net/connman/iwd/0/3 net.connman.iwd.StationDebug AutoConnect
 sudo iwctl debug wlan0 roam <bssid>                   # lo que hace el plugin al pulsar un AP
 ```
 
@@ -187,6 +203,8 @@ funciona (Decky desinstala e instala).
 4. Tras el primer reinicio de iwd hubo que reconectar a mano → el plugin ahora hace
    `nmcli connection up` si NM no reasocia en 8 s.
 5. Fabricante por OUI (IEEE) embebido y offline, a petición.
+6. Tras suspender, la Deck dejó de reconectar sola → el modo desarrollador desactiva el
+   autoconnect de iwd (visto en el código fuente). Vigilante por D-Bus que lo reactiva.
 
 ## 9. Ideas para más adelante
 

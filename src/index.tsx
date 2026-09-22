@@ -36,6 +36,7 @@ type Status = {
   backend?: "iwd" | "wpa";
   iwd_dev_mode?: boolean;
   iwd_dropin?: boolean; // el drop-in lo creó este plugin
+  iwd_autoconnect?: boolean | null; // null = no legible (sin modo desarrollador)
 };
 
 type AccessPoint = {
@@ -221,7 +222,9 @@ function Content() {
                 description={
                   status.backend === "iwd"
                     ? status.iwd_dev_mode
-                      ? "iwd · cambio de AP disponible"
+                      ? status.iwd_autoconnect === false
+                        ? "iwd · cambio de AP disponible · autoconnect desactivado (reactivando…)"
+                        : "iwd · cambio de AP disponible"
                       : "iwd · modo desarrollador desactivado"
                     : pinned
                       ? "BSSID fijado en el perfil"

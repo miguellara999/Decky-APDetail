@@ -148,6 +148,85 @@ class Plugin:
         rc, out, err = await _run("iwctl", "debug", device, "get-networks")
         return rc == 0 and "not found" not in (out + err).lower()
 
+    # ------------------------------------------------------------------
+    # Autoconnect de iwd en modo desarrollador
+    #
+    # En modo desarrollador iwd crea la estación con autoconnect=false
+    # (src/station.c, station_create), así que tras suspender la Deck no
+    # reconecta sola. La propiedad AutoConnect de StationDebug es escribible:
+    # la vigilamos y la volvemos a activar cuando haga falta.
+    # ------------------------------------------------------------------
+
+    _iwd_station_path: str | None = None
+    _autoconnect_task: asyncio.Task | None = None
+
+    async def _find_iwd_station_path(self) -> str | None:
+        if self._iwd_station_path:
+            return self._iwd_station_path
+        rc, out, _ = await _run("busctl", "tree", "net.connman.iwd", "--list")
+        if rc != 0:
+            return None
+        for path in out.split():
+            if not re.fullmatch(r"/net/connman/iwd/\d+/\d+", path):
+                continue
+            rc, _, _ = await _run(
+                "busctl", "get-property", "net.connman.iwd", path,
+                "net.connman.iwd.StationDebug", "AutoConnect",
+            )
+            if rc == 0:
+                self._iwd_station_path = path
+                return path
+        return None
+
+    async def _iwd_get_autoconnect(self) -> bool | None:
+        """True/False, o None si no se puede leer (sin modo desarrollador, etc.)."""
+        path = await self._find_iwd_station_path()
+        if not path:
+            return None
+        rc, out, _ = await _run(
+            "busctl", "get-property", "net.connman.iwd", path,
+            "net.connman.iwd.StationDebug", "AutoConnect",
+        )
+        if rc != 0:
+            self._iwd_station_path = None  # la interfaz pudo recrearse tras suspender
+            return None
+        return out.strip().endswith("true")
+
+    async def _iwd_set_autoconnect(self, enable: bool) -> bool:
+        path = await self._find_iwd_station_path()
+        if not path:
+            return False
+        rc, _, err = await _run(
+            "busctl", "set-property", "net.connman.iwd", path,
+            "net.connman.iwd.StationDebug", "AutoConnect", "b", "true" if enable else "false",
+        )
+        if rc != 0:
+            decky.logger.warning("No se pudo fijar AutoConnect: %s", err.strip())
+            self._iwd_station_path = None
+            return False
+        return True
+
+    async def _autoconnect_watchdog(self) -> None:
+        """Bucle en segundo plano: mantiene AutoConnect=true mientras iwd esté
+        en modo desarrollador. Barato (una llamada busctl cada pocos segundos)."""
+        while True:
+            try:
+                if await self._wifi_backend() != "iwd":
+                    return
+                state = await self._iwd_get_autoconnect()
+                if state is None:
+                    await asyncio.sleep(15)  # sin modo desarrollador: nada que vigilar
+                    continue
+                if not state:
+                    if await self._iwd_set_autoconnect(True):
+                        decky.logger.info("AutoConnect de iwd estaba desactivado; reactivado")
+                await asyncio.sleep(4)
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001
+                decky.logger.exception("autoconnect watchdog")
+                await asyncio.sleep(15)
+
     async def _current_bssid(self, device: str) -> str:
         link = await self._iw_link(device)
         return link.get("bssid", "")
@@ -339,6 +418,7 @@ class Plugin:
             if backend == "iwd":
                 result["iwd_dev_mode"] = await self._iwd_dev_mode(dev["device"])
                 result["iwd_dropin"] = os.path.exists(IWD_DROPIN)
+                result["iwd_autoconnect"] = await self._iwd_get_autoconnect()
                 result["pinned_bssid"] = ""
             else:
                 result["pinned_bssid"] = await self._pinned_bssid(dev["connection"])
@@ -459,6 +539,14 @@ class Plugin:
         if rc != 0:
             return {"ok": False, "error": err.strip() or "No se pudo reiniciar iwd"}
 
+        # En modo desarrollador iwd arranca con autoconnect=false: lo activamos
+        # ya para que reconecte solo (y siga haciéndolo tras suspender).
+        self._iwd_station_path = None
+        for _ in range(10):
+            await asyncio.sleep(0.5)
+            if await self._iwd_get_autoconnect() is not None:
+                await self._iwd_set_autoconnect(True)
+                break
         if await self._wait_connected(8):
             return {"ok": True}
         if conn:
@@ -527,8 +615,12 @@ class Plugin:
     async def _main(self):
         decky.logger.info("APDetail cargado")
         await asyncio.get_running_loop().run_in_executor(None, _oui._load)
+        self._autoconnect_task = asyncio.create_task(self._autoconnect_watchdog())
 
     async def _unload(self):
+        if self._autoconnect_task:
+            self._autoconnect_task.cancel()
+            self._autoconnect_task = None
         decky.logger.info("APDetail descargado")
 
     async def _uninstall(self):
