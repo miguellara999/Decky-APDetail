@@ -7,10 +7,28 @@ SSID. Útil en redes con varios puntos de acceso (mesh, repetidores) cuando la D
 
 ## Qué hace
 
-- Muestra la conexión actual: SSID, BSSID, señal (% y dBm), banda, canal, velocidad e IP.
-- Lista los APs visibles con el mismo SSID, ordenados por señal.
-- Permite conectarse a un AP concreto fijando su BSSID en el perfil de NetworkManager.
-- Permite quitar la fijación para volver al roaming automático.
+- Muestra la conexión actual: SSID, BSSID, fabricante del AP, señal (dBm en vivo y %), banda,
+  canal, velocidad e IP.
+- Lista los APs visibles con el mismo SSID, ordenados por señal, con fabricante, MAC, banda,
+  canal, dBm/% y antigüedad de la medición. Un interruptor permite ver todas las redes.
+- Permite cambiarse a un AP concreto pulsando sobre él (reasociación rápida, sin cortar la
+  conexión).
+
+## Uso
+
+1. Abre el menú de acceso rápido (…) → APDetail.
+2. La primera vez pulsa **«Activar modo desarrollador de iwd»** (necesario en SteamOS para poder
+   elegir AP; ver más abajo). El WiFi se corta unos segundos y reconecta solo.
+3. Pulsa sobre el AP al que quieras cambiarte. Un aviso confirma el cambio y el BSSID de arriba
+   se actualiza.
+
+Con el panel abierto la lista se refresca cada 10 s y cada 30 s hace un escaneo dirigido a los
+canales de tu SSID; «Volver a escanear» hace uno completo. Al cerrar el panel no se escanea.
+
+Sobre la señal: compara en **dBm** (misma fuente y escala para todos los APs; el del AP en uso
+es en vivo). Diferencias menores de ~6 dB son ruido. «hace N s» indica que el dato viene del
+último escaneo en que se oyó ese AP; «visto hace N s» que el kernel ya lo caducó y se muestra
+de memoria (hasta 3 min).
 
 ## SteamOS e iwd (importante)
 
@@ -81,9 +99,10 @@ Luego en la Deck: Decky > ⚙ > Desarrollador > «Instalar plugin desde zip».
 
 Ver [DESARROLLO.md](DESARROLLO.md) para arquitectura, decisiones y depuración.
 
-## Cómo funciona
+## Cómo funciona (resumen)
 
-- **Backend** (`main.py`): usa `nmcli` para listar APs y modificar el perfil de conexión
-  (`802-11-wireless.bssid`), e `iw` para obtener señal en dBm y bitrate. Requiere el flag `root`.
-- **Frontend** (`src/index.tsx`): React + `@decky/ui`; se refresca cada 10 s mientras el panel
-  está abierto.
+- **Backend** (`main.py`, corre como root): `nmcli` para el estado, `iw` para la lista de BSS y la
+  señal en vivo, `iwctl`/`busctl` (API `StationDebug` de iwd) para cambiar de AP, escanear canales
+  concretos y mantener el autoconnect. Fabricante por base OUI del IEEE embebida (offline).
+- **Frontend** (`src/index.tsx`): React + `@decky/ui`.
+- Probado en SteamOS 3.7 (iwd) con una red de dos APs (devolo + MikroTik) en el mismo SSID.

@@ -49,7 +49,11 @@ Compilación: `pnpm install && pnpm run build` → `dist/index.js` (rollup vía 
 - Probar el backend sin la Deck: `.devtest/decky.py` es un stub con `logger`,
   `DECKY_PLUGIN_DIR` y `DECKY_PLUGIN_SETTINGS_DIR`; los scripts hacen `sys.path.insert(0, "..")`
   e importan `main`. `nmcli`/`iw` del PC sirven para probar el parseo (en el PC NM usa
-  wpa_supplicant, así que la parte iwd no se puede probar aquí).
+  wpa_supplicant, así que la parte iwd no se puede probar aquí). Scripts (ejecutar desde
+  `.devtest/` en el host): `sample.py` (escaneo real + OUI), `parse_test.py` (parser de `iw` con
+  salida de la Deck), `cache_test.py` (memoria de APs y frecuencias conocidas),
+  `uninstall_test.py` (revertir al desinstalar / cancelar al actualizar). `.devtest/iwd-src/` y
+  `.devtest/decky-src/` guardan fuentes de iwd y Decky Loader consultadas.
 
 ## 4. Cómo funciona el backend (`main.py`)
 
@@ -66,9 +70,11 @@ esté localizada, `PATH` explícito porque corremos como root con entorno mínim
 1. `nmcli -t -f DEVICE,TYPE,STATE,CONNECTION dev status` → interfaz wifi y perfil activo.
 2. `iw dev <dev> link` → BSSID real, señal dBm, freq, rx/tx bitrate.
 3. `nmcli -g IP4.ADDRESS dev show <dev>` → IP.
-4. Con iwd: `iwd_dev_mode` (¿existe la interfaz debug?) e `iwd_dropin` (¿el drop-in es nuestro?).
+4. Con iwd: `iwd_dev_mode` (¿existe la interfaz debug?), `iwd_dropin` (¿el drop-in es nuestro?)
+   e `iwd_autoconnect` (propiedad `AutoConnect`, `null` si no es legible).
    Con wpa: `802-11-wireless.bssid` del perfil (`pinned_bssid`).
-5. Completa SSID/canal/señal % con la entrada `in_use` de la lista de APs.
+5. Completa SSID/canal/fabricante con la entrada `in_use` de la lista de APs; la señal (dBm y %)
+   es la del enlace en vivo.
 
 ### Lista de APs (`scan` → `_list_aps`)
 
@@ -208,13 +214,19 @@ falla, mirar `systemctl cat iwd` en la Deck y copiar los argumentos originales a
 ## 6. Frontend (`src/index.tsx`)
 
 - `callable<[args], Result>("metodo")` de `@decky/api` para cada método del backend.
-- Al montar: `refresh(true)` (escaneo real) y luego un `setInterval` cada 10 s con
-  `refresh(false)` (caché). El intervalo se limpia al desmontar.
+- `refresh(rescan, quick)`: `get_status()` + `scan(rescan, quick)`. Al montar: `refresh(false)`
+  (caché, instantáneo) y a continuación `refresh(true)` (escaneo completo, muestra "Escaneando…").
+  Después `setInterval` cada 10 s (`REFRESH_MS`): dos refrescos de caché y uno con escaneo
+  dirigido (`quick=true`, sin indicador). El intervalo se limpia al desmontar. «Volver a
+  escanear» = `refresh(true)` completo.
 - Estado: `status`, `sameSsid`, `allAps`, `showAll` (toggle "Mostrar todas las redes"), `busy`
   (BSSID en curso, `"clear"` o `"iwd"`), `scanning`.
 - Cada AP es un `ButtonItem` con título = SSID (o "(SSID oculto)") y descripción
-  `fabricante · MAC · banda · canal N · %señal ▂▄▆█`. Deshabilitado si está en uso o, en modo
-  "todas las redes", si no es del SSID actual (fijar otro SSID rompería la conexión).
+  `fabricante · MAC · banda · canal N · −61 dBm · 65% ▂▄▆_ · hace 12 s` (`signalText` +
+  `ageText`; "visto hace…" si `stale`). Deshabilitado si está en uso o, en modo "todas las
+  redes", si no es del SSID actual (fijar otro SSID rompería la conexión).
+- "Punto de acceso" muestra bajo el BSSID el estado: `iwd · cambio de AP disponible`, `… ·
+  autoconnect desactivado (reactivando…)` o `iwd · modo desarrollador desactivado`.
 - Botón iwd: "Activar modo desarrollador de iwd" ↔ "Revertir modo desarrollador de iwd".
 - Botón "Quitar fijación" solo aparece con backend wpa y BSSID fijado.
 - Feedback siempre por `toaster.toast`.
@@ -222,8 +234,10 @@ falla, mirar `systemctl cat iwd` en la Deck y copiar los argumentos originales a
 ## 7. Depurar en la Deck
 
 Logs del backend: `/home/deck/homebrew/logs/APDetail/<fecha>.log` (uno por carga del plugin).
-Líneas útiles: `Backend WiFi:`, `iw aporta N APs…`, `scan(rescan=…): … same_ssid=[…]`,
-`Roam OK: A -> B`, `iwctl roam falló…`, `Drop-in creado/eliminado`.
+Líneas útiles: `Backend WiFi:`, `iw aporta N APs…`, `scan(rescan=…, freqs=…): … same_ssid=[…]`
+(`freqs=None` = completo, `[5180]` = dirigido), `Roam OK: A -> B`, `iwctl roam falló…`,
+`Drop-in creado/eliminado`, `AutoConnect de iwd estaba desactivado; reactivado`,
+`Reinicio de iwd programado en 90 s`, `Actualización detectada: drop-in de iwd restaurado…`.
 
 Comandos para comparar con lo que ve el plugin:
 
@@ -239,6 +253,7 @@ systemctl cat iwd                                     # unit + drop-in
 systemctl list-timers apdetail-iwd-revert.timer       # reinicio diferido pendiente tras desinstalar
 busctl tree net.connman.iwd --list                    # object path de la estación (/net/connman/iwd/N/M)
 busctl get-property net.connman.iwd /net/connman/iwd/0/3 net.connman.iwd.StationDebug AutoConnect
+busctl call net.connman.iwd /net/connman/iwd/0/3 net.connman.iwd.StationDebug Scan aq 1 5180   # escaneo dirigido
 sudo iwctl debug wlan0 roam <bssid>                   # lo que hace el plugin al pulsar un AP
 ```
 
