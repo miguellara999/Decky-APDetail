@@ -131,6 +131,11 @@ ExecStart=
 ExecStart=/usr/lib/iwd/iwd --developer
 """
 
+# Temporizador transitorio que reinicia iwd en modo normal tras desinstalar el
+# plugin. Si en realidad era una actualización, la versión nueva lo cancela.
+IWD_REVERT_UNIT = "apdetail-iwd-revert"
+IWD_REVERT_DELAY_S = 90
+
 
 class Plugin:
     _backend: str | None = None
@@ -559,6 +564,49 @@ class Plugin:
                 return {"ok": True}
         return {"ok": True, "warning": "iwd reiniciado; reconecta el WiFi desde el menú de la Deck"}
 
+    def _write_dropin(self) -> None:
+        os.makedirs(IWD_DROPIN_DIR, exist_ok=True)
+        with open(IWD_DROPIN, "w", encoding="utf-8") as f:
+            f.write(IWD_DROPIN_CONTENT)
+        decky.logger.info("Drop-in creado: %s", IWD_DROPIN)
+
+    def _remove_dropin(self) -> None:
+        if os.path.exists(IWD_DROPIN):
+            os.remove(IWD_DROPIN)
+            decky.logger.info("Drop-in eliminado: %s", IWD_DROPIN)
+        # Si el directorio queda vacío lo quitamos para dejarlo como estaba
+        try:
+            os.rmdir(IWD_DROPIN_DIR)
+        except OSError:
+            pass
+
+    @property
+    def _revert_marker(self) -> str:
+        # El directorio de ajustes sobrevive a actualizaciones y desinstalaciones
+        return os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "iwd-dev-mode-pending")
+
+    async def _cancel_revert_timer(self) -> None:
+        await _run("systemctl", "stop", f"{IWD_REVERT_UNIT}.timer", f"{IWD_REVERT_UNIT}.service")
+
+    async def _resume_after_update(self) -> None:
+        """Si _uninstall dejó una marca, esto era una actualización: cancelamos el
+        reinicio diferido de iwd y restauramos el drop-in (iwd sigue en modo
+        desarrollador, no hace falta reiniciarlo)."""
+        if not os.path.exists(self._revert_marker):
+            return
+        try:
+            os.remove(self._revert_marker)
+        except OSError:
+            pass
+        await self._cancel_revert_timer()
+        if await self._wifi_backend() != "iwd":
+            return
+        dev = await self._wifi_device()
+        if dev and await self._iwd_dev_mode(dev["device"]) and not os.path.exists(IWD_DROPIN):
+            self._write_dropin()
+            await _run("systemctl", "daemon-reload")
+            decky.logger.info("Actualización detectada: drop-in de iwd restaurado y reinicio cancelado")
+
     async def set_iwd_dev_mode(self, enable: bool) -> dict[str, Any]:
         """Activa/revierte el modo desarrollador de iwd mediante un drop-in de
         systemd y reinicia iwd (el WiFi se cae unos segundos y reconecta solo)."""
@@ -566,19 +614,9 @@ class Plugin:
             if await self._wifi_backend() != "iwd":
                 return {"ok": False, "error": "El sistema no usa iwd"}
             if enable:
-                os.makedirs(IWD_DROPIN_DIR, exist_ok=True)
-                with open(IWD_DROPIN, "w", encoding="utf-8") as f:
-                    f.write(IWD_DROPIN_CONTENT)
-                decky.logger.info("Drop-in creado: %s", IWD_DROPIN)
+                self._write_dropin()
             else:
-                if os.path.exists(IWD_DROPIN):
-                    os.remove(IWD_DROPIN)
-                    decky.logger.info("Drop-in eliminado: %s", IWD_DROPIN)
-                # Si el directorio queda vacío lo quitamos para dejarlo como estaba
-                try:
-                    os.rmdir(IWD_DROPIN_DIR)
-                except OSError:
-                    pass
+                self._remove_dropin()
             result = await self._restart_iwd_and_wait()
             if result["ok"]:
                 decky.logger.info("iwd reiniciado en modo %s", "desarrollador" if enable else "normal")
@@ -614,6 +652,8 @@ class Plugin:
 
     async def _main(self):
         decky.logger.info("APDetail cargado")
+        os.makedirs(decky.DECKY_PLUGIN_SETTINGS_DIR, exist_ok=True)
+        await self._resume_after_update()
         await asyncio.get_running_loop().run_in_executor(None, _oui._load)
         self._autoconnect_task = asyncio.create_task(self._autoconnect_watchdog())
 
@@ -624,11 +664,33 @@ class Plugin:
         decky.logger.info("APDetail descargado")
 
     async def _uninstall(self):
-        # No revertimos aquí el modo desarrollador de iwd: Decky también llama a
-        # _uninstall al reinstalar/actualizar el plugin y reiniciaría el WiFi
-        # cada vez. Se revierte desde el botón del plugin.
-        if os.path.exists(IWD_DROPIN):
-            decky.logger.warning("Queda activo el modo desarrollador de iwd (%s)", IWD_DROPIN)
+        # Decky llama a _uninstall también al actualizar el plugin, y tras esto
+        # manda SIGTERM y a los 5 s SIGKILL. Así que aquí solo hacemos lo rápido:
+        # quitar el drop-in y programar un reinicio de iwd dentro de 90 s. Si era
+        # una actualización, la versión nueva lo cancela en _main (ver
+        # _resume_after_update); si era una desinstalación real, iwd vuelve a
+        # modo normal solo.
+        try:
+            if os.path.exists(IWD_DROPIN):
+                # 1) Programar el reinicio diferido (lo más importante, por si nos matan)
+                await self._cancel_revert_timer()
+                rc, _, err = await _run(
+                    "systemd-run", f"--on-active={IWD_REVERT_DELAY_S}", f"--unit={IWD_REVERT_UNIT}",
+                    "--description=APDetail: reiniciar iwd en modo normal tras desinstalar",
+                    "/bin/sh", "-c", "systemctl daemon-reload; systemctl restart iwd",
+                    timeout=3,
+                )
+                if rc != 0:
+                    decky.logger.warning("No se pudo programar el reinicio de iwd: %s", err.strip())
+                else:
+                    decky.logger.info("Reinicio de iwd programado en %d s", IWD_REVERT_DELAY_S)
+                # 2) Quitar el drop-in (el daemon-reload lo hace el temporizador)
+                self._remove_dropin()
+                # 3) Marca para que una actualización pueda deshacer todo esto
+                with open(self._revert_marker, "w", encoding="utf-8") as f:
+                    f.write("1")
+        except Exception:  # noqa: BLE001
+            decky.logger.exception("_uninstall")
         decky.logger.info("APDetail desinstalado")
 
     async def _migration(self):

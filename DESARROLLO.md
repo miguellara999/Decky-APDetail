@@ -145,9 +145,21 @@ Decisiones:
 
 - El botón solo ofrece "Revertir" si el drop-in es nuestro (`iwd_dropin`), para no tocar una
   configuración ajena.
-- **No se revierte en `_uninstall`**: Decky llama a `_uninstall` también al reinstalar o
-  actualizar el plugin desde zip, y reiniciaría el WiFi en cada actualización. Se revierte solo
-  desde el botón (documentado en README).
+- **Revertir al desinstalar** (`_uninstall`). Restricciones de Decky (vistas en
+  `browser.py`/`plugin.py`/`sandboxed_plugin.py`): `_install` llama a `uninstall_plugin` →
+  `stop(uninstall=True)` también al **actualizar**, y tras el mensaje manda `SIGTERM` y a los
+  **5 s** `SIGKILL`. No se puede distinguir actualización de desinstalación ni reiniciar iwd ahí.
+  Solución:
+  1. `_uninstall` (solo operaciones instantáneas): programa con `systemd-run --on-active=90
+     --unit=apdetail-iwd-revert sh -c 'systemctl daemon-reload; systemctl restart iwd'`, borra
+     el drop-in y escribe la marca `DECKY_PLUGIN_SETTINGS_DIR/iwd-dev-mode-pending` (el
+     directorio de ajustes sobrevive a ambos casos).
+  2. `_main` → `_resume_after_update()`: si hay marca, la borra, para el timer
+     (`systemctl stop apdetail-iwd-revert.timer`) y, si iwd sigue en modo desarrollador,
+     recrea el drop-in + `daemon-reload` (sin reiniciar iwd: ya está en dev mode).
+  3. Si nadie cancela (desinstalación real), a los 90 s iwd se reinicia en modo normal y, con
+     autoconnect por defecto, reconecta solo.
+  Test de esta lógica con stubs: `.devtest/uninstall_test.py`.
 - El drop-in vive en `/etc`, que en SteamOS persiste entre actualizaciones del sistema.
 
 Pendiente de comprobar: el `ExecStart` original de iwd en SteamOS se sobrescribió con la ruta de
@@ -185,6 +197,7 @@ iwctl station wlan0 show
 iwctl station wlan0 get-bsses "<SSID>"                # BSS por red, según iwd
 iwctl debug wlan0 get-networks                        # falla si no hay modo desarrollador
 systemctl cat iwd                                     # unit + drop-in
+systemctl list-timers apdetail-iwd-revert.timer       # reinicio diferido pendiente tras desinstalar
 busctl tree net.connman.iwd --list                    # object path de la estación (/net/connman/iwd/N/M)
 busctl get-property net.connman.iwd /net/connman/iwd/0/3 net.connman.iwd.StationDebug AutoConnect
 sudo iwctl debug wlan0 roam <bssid>                   # lo que hace el plugin al pulsar un AP
@@ -205,6 +218,7 @@ funciona (Decky desinstala e instala).
 5. Fabricante por OUI (IEEE) embebido y offline, a petición.
 6. Tras suspender, la Deck dejó de reconectar sola → el modo desarrollador desactiva el
    autoconnect de iwd (visto en el código fuente). Vigilante por D-Bus que lo reactiva.
+7. Revertir al desinstalar sin romper las actualizaciones: timer transitorio de systemd + marca.
 
 ## 9. Ideas para más adelante
 

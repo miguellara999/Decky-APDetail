@@ -28,8 +28,9 @@ no expone la elección de BSSID a NetworkManager, así que:
   vigilante en segundo plano reactiva `AutoConnect` (propiedad de `StationDebug`) siempre que la
   encuentra desactivada. Escaneo, roaming y consumo no cambian.
 
-  Ojo: desinstalar el plugin **no** revierte el modo desarrollador (Decky también llama a
-  `_uninstall` al actualizar el plugin). Pulsa «Revertir» antes de desinstalar, o hazlo a mano:
+  Al **desinstalar** el plugin, el modo desarrollador se revierte solo: se elimina el drop-in y
+  iwd se reinicia en modo normal 90 s después (reconecta por sí mismo). Al **actualizar** el
+  plugin no pasa nada: la versión nueva cancela ese reinicio.
 
   Equivalente manual:
 
