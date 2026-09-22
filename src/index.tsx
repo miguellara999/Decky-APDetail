@@ -47,6 +47,7 @@ type AccessPoint = {
   signal: number; // 0-100, fórmula de NetworkManager sobre signal_dbm
   signal_dbm?: number;
   age_ms?: number; // antigüedad de la medición (0 = en vivo)
+  stale?: boolean; // ya no está en la lista del kernel; viene de la memoria del backend
   freq: number;
   band: string;
   chan: number;
@@ -81,6 +82,8 @@ const clearBssid = callable<[], ActionResult>("clear_bssid");
 const setIwdDevMode = callable<[enable: boolean], ActionResult>("set_iwd_dev_mode");
 
 const REFRESH_MS = 10_000;
+// Cada N refrescos hacemos un escaneo real (el kernel caduca los APs no oídos en 30 s)
+const RESCAN_EVERY = 3;
 
 // ---------------------------------------------------------------------------
 // Helpers de presentación
@@ -99,10 +102,12 @@ function signalText(ap: AccessPoint): string {
   return `${dbm}${ap.signal}% ${signalBars(ap.signal)}`;
 }
 
-function ageText(ageMs?: number): string {
-  if (!ageMs || ageMs < 3000) return "";
+function ageText(ap: AccessPoint): string {
+  const ageMs = ap.age_ms ?? 0;
+  if (ageMs < 3000) return "";
   const s = Math.round(ageMs / 1000);
-  return s < 90 ? ` · hace ${s} s` : ` · hace ${Math.round(s / 60)} min`;
+  const t = s < 90 ? `hace ${s} s` : `hace ${Math.round(s / 60)} min`;
+  return ap.stale ? ` · visto ${t}` : ` · ${t}`;
 }
 
 function shortBssid(bssid: string): string {
@@ -142,8 +147,13 @@ function Content() {
   }, []);
 
   useEffect(() => {
-    void refresh(true);
-    const id = setInterval(() => void refresh(false), REFRESH_MS);
+    // Primero la caché (instantánea), luego un escaneo real en segundo plano
+    void refresh(false).then(() => refresh(true));
+    let tick = 0;
+    const id = setInterval(() => {
+      tick += 1;
+      void refresh(tick % RESCAN_EVERY === 0);
+    }, REFRESH_MS);
     return () => clearInterval(id);
   }, [refresh]);
 
@@ -343,7 +353,7 @@ function Content() {
               disabled={busy !== null || ap.in_use || (showAll && !isSameNetwork(ap))}
               description={
                 (ap.vendor ? `${ap.vendor} · ` : "") +
-                `${ap.bssid} · ${ap.band} · canal ${ap.chan} · ${signalText(ap)}${ageText(ap.age_ms)}`
+                `${ap.bssid} · ${ap.band} · canal ${ap.chan} · ${signalText(ap)}${ageText(ap)}`
               }
               onClick={() => void onConnect(ap)}
             >

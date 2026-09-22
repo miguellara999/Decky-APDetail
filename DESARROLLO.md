@@ -107,6 +107,15 @@ Ahora:
   `iwctl station <dev> show` diga `Scanning no` (máx. 10 s; la salida puede llevar códigos ANSI,
   se limpian con `_ANSI`). Con wpa_supplicant se sigue usando `iw scan`.
 
+- **Memoria de APs** (`_ap_cache`, TTL 180 s): el kernel (cfg80211) caduca los BSS que lleva
+  más de 30 s sin oír, y lo hace justo al hacer `scan dump`; estando conectado nadie escanea
+  (iwd solo lo hace si la señal baja), así que los otros APs "desaparecían" a los 30 s. El
+  backend recuerda cada AP con su última medición y lo devuelve con `stale: true` y `age_ms`
+  actualizado hasta que pase el TTL. La UI lo muestra como "visto hace N s".
+- **Frontend**: al abrir, primero `scan(false)` (caché, instantáneo) y después `scan(true)` en
+  segundo plano; luego refresco cada 10 s y escaneo real cada 3 refrescos (30 s) mientras el
+  panel está abierto.
+
 Sobre la fiabilidad en general: el RSSI oscila ±3-5 dB por ruido/multipath incluso quieto;
 diferencias menores de ~6 dB no significan nada. Comparar siempre en dBm, no en %.
 

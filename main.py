@@ -3,6 +3,7 @@ import gzip
 import json
 import os
 import re
+import time
 from typing import Any
 
 import decky
@@ -138,6 +139,11 @@ ExecStart=
 ExecStart=/usr/lib/iwd/iwd --developer
 """
 
+# Memoria de APs vistos recientemente. El kernel caduca los BSS que lleva más de
+# 30 s sin oír (y estando conectado nadie escanea), así que sin esto los otros
+# APs "desaparecen" a la media minuto. Se muestran con su antigüedad.
+AP_CACHE_TTL_S = 180
+
 # Temporizador transitorio que reinicia iwd en modo normal tras desinstalar el
 # plugin. Si en realidad era una actualización, la versión nueva lo cancela.
 IWD_REVERT_UNIT = "apdetail-iwd-revert"
@@ -146,6 +152,7 @@ IWD_REVERT_DELAY_S = 90
 
 class Plugin:
     _backend: str | None = None
+    _ap_cache: dict[str, tuple[float, dict[str, Any]]] = {}  # bssid -> (visto_en, ap)
 
     async def _wifi_backend(self) -> str:
         """'iwd' si NetworkManager usa iwd (SteamOS >= 3.5), si no 'wpa'."""
@@ -395,6 +402,22 @@ class Plugin:
                     ap["signal_dbm"] = link["signal_dbm"]
                     ap["signal"] = _dbm_to_percent(link["signal_dbm"])
                     ap["age_ms"] = 0
+        # Memoria: recordamos lo visto y recuperamos lo que el kernel ya caducó
+        now = time.monotonic()
+        for ap in aps:
+            seen_at = now - ap.get("age_ms", 0) / 1000
+            prev = self._ap_cache.get(ap["bssid"])
+            if prev is None or seen_at >= prev[0]:
+                self._ap_cache[ap["bssid"]] = (seen_at, dict(ap))
+        present = {a["bssid"] for a in aps}
+        for bssid, (seen_at, cached) in list(self._ap_cache.items()):
+            age = now - seen_at
+            if age > AP_CACHE_TTL_S:
+                del self._ap_cache[bssid]
+            elif bssid not in present:
+                stale = dict(cached)
+                stale.update({"in_use": False, "age_ms": int(age * 1000), "stale": True})
+                aps.append(stale)
         aps.sort(key=lambda a: (not a["in_use"], -a["signal"]))
         return aps
 
