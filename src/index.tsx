@@ -44,7 +44,9 @@ type AccessPoint = {
   bssid: string;
   vendor: string;
   ssid: string;
-  signal: number;
+  signal: number; // 0-100, fórmula de NetworkManager sobre signal_dbm
+  signal_dbm?: number;
+  age_ms?: number; // antigüedad de la medición (0 = en vivo)
   freq: number;
   band: string;
   chan: number;
@@ -90,6 +92,17 @@ function signalBars(signal: number): string {
   if (signal >= 40) return "▂▄__";
   if (signal >= 20) return "▂___";
   return "____";
+}
+
+function signalText(ap: AccessPoint): string {
+  const dbm = ap.signal_dbm != null ? `${Math.round(ap.signal_dbm)} dBm · ` : "";
+  return `${dbm}${ap.signal}% ${signalBars(ap.signal)}`;
+}
+
+function ageText(ageMs?: number): string {
+  if (!ageMs || ageMs < 3000) return "";
+  const s = Math.round(ageMs / 1000);
+  return s < 90 ? ` · hace ${s} s` : ` · hace ${Math.round(s / 60)} min`;
 }
 
 function shortBssid(bssid: string): string {
@@ -241,9 +254,9 @@ function Content() {
               </Field>
             </PanelSectionRow>
             <PanelSectionRow>
-              <Field label="Señal" focusable>
-                {status.signal != null ? `${status.signal}%` : ""}
-                {status.signal_dbm != null ? ` (${status.signal_dbm} dBm)` : ""}
+              <Field label="Señal" description="dBm en vivo del enlace; % con la fórmula de Steam/NetworkManager" focusable>
+                {status.signal_dbm != null ? `${status.signal_dbm} dBm` : ""}
+                {status.signal != null ? ` (${status.signal}%)` : ""}
               </Field>
             </PanelSectionRow>
             <PanelSectionRow>
@@ -330,7 +343,7 @@ function Content() {
               disabled={busy !== null || ap.in_use || (showAll && !isSameNetwork(ap))}
               description={
                 (ap.vendor ? `${ap.vendor} · ` : "") +
-                `${ap.bssid} · ${ap.band} · canal ${ap.chan} · ${ap.signal}% ${signalBars(ap.signal)}`
+                `${ap.bssid} · ${ap.band} · canal ${ap.chan} · ${signalText(ap)}${ageText(ap.age_ms)}`
               }
               onClick={() => void onConnect(ap)}
             >

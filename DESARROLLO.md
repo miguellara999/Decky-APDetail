@@ -89,6 +89,27 @@ log aparece `iw aporta N APs que NM no listaba` cuando esto ocurre.
 Cada AP lleva `source: "nm" | "iw"`, `vendor` (OUI) y `band` (calculada de la frecuencia).
 `same_ssid` filtra por el SSID del AP `in_use`.
 
+### Señal: una sola fuente y una sola escala
+
+Síntoma que llevó a esto: "el otro AP siempre parece tener más señal; cambio y se invierten las
+tornas sin moverme". Causa: el AP en uso tomaba el % de `nmcli` (iwd → NM, señal de la *red*,
+fórmula de NM, dato viejo) y el resto el dBm de `iw scan dump` con una fórmula distinta y más
+generosa, además congelado desde el último escaneo (estando asociado, el driver solo refresca el
+AP propio con cada beacon).
+
+Ahora:
+- **dBm del driver para todos** (`iw scan dump`, campo `signal_dbm`), y para el AP en uso el
+  valor **en vivo** de `iw dev <dev> link` (`age_ms = 0`).
+- **Un único %**: fórmula de NetworkManager (`_dbm_to_percent`: −40 dBm → 100 %, −100 → 0 %,
+  lineal), que es la de las barras de Steam.
+- **Antigüedad** (`age_ms`, de `last seen: N ms ago`) mostrada como "hace N s" si supera 3 s.
+- **Escaneo real vía iwd** (`_trigger_scan`): `iwctl station <dev> scan` y espera a que
+  `iwctl station <dev> show` diga `Scanning no` (máx. 10 s; la salida puede llevar códigos ANSI,
+  se limpian con `_ANSI`). Con wpa_supplicant se sigue usando `iw scan`.
+
+Sobre la fiabilidad en general: el RSSI oscila ±3-5 dB por ruido/multipath incluso quieto;
+diferencias menores de ~6 dB no significan nada. Comparar siempre en dBm, no en %.
+
 ### Cambiar de AP (`connect_bssid`)
 
 - **iwd** (`_connect_bssid_iwd`): `iwctl debug <dev> roam <bssid>` (reasociación rápida sin
@@ -219,6 +240,8 @@ funciona (Decky desinstala e instala).
 6. Tras suspender, la Deck dejó de reconectar sola → el modo desarrollador desactiva el
    autoconnect de iwd (visto en el código fuente). Vigilante por D-Bus que lo reactiva.
 7. Revertir al desinstalar sin romper las actualizaciones: timer transitorio de systemd + marca.
+8. La señal "se invertía" al cambiar de AP → fuentes/escalas mezcladas. dBm del driver para todos,
+   en vivo para el AP en uso, % con la fórmula de NM, antigüedad visible y escaneo vía iwd.
 
 ## 9. Ideas para más adelante
 

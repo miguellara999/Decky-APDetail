@@ -65,7 +65,14 @@ def _band(freq_mhz: int) -> str:
 
 
 def _dbm_to_percent(dbm: float) -> int:
-    return max(0, min(100, int(round((dbm + 100) * 2))))
+    """Misma fórmula que NetworkManager (nm_wifi_utils_level_to_quality):
+    -40 dBm o mejor = 100 %, -100 dBm = 0 %, lineal entre medias. Así el %
+    del plugin coincide con las barras de Steam."""
+    dbm = max(-100.0, min(-40.0, dbm))
+    return int(round(100 - (-40 - dbm) * 100 / 60))
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _freq_to_chan(freq: int) -> int:
@@ -278,19 +285,34 @@ class Plugin:
         rc, out, _ = await _run("nmcli", "-g", "IP4.ADDRESS", "dev", "show", device)
         return out.strip().split("\n")[0] if rc == 0 else ""
 
-    async def _iw_scan(self, device: str, rescan: bool) -> list[dict[str, Any]]:
-        """Escaneo directo al driver. `scan` fuerza un escaneo nuevo; si el
-        dispositivo está ocupado (p.ej. NM escaneando) caemos a `scan dump`."""
-        out = ""
-        if rescan:
-            rc, out, err = await _run("iw", "dev", device, "scan", timeout=40)
+    async def _trigger_scan(self, device: str) -> None:
+        """Fuerza un escaneo nuevo. Con iwd se lo pedimos a él (es el dueño del
+        dispositivo; `iw scan` directo suele fallar con 'Device or resource busy')
+        y esperamos a que termine. Con wpa_supplicant usamos `iw scan`."""
+        if await self._wifi_backend() == "iwd":
+            rc, _, err = await _run("iwctl", "station", device, "scan")
+            if rc != 0:
+                decky.logger.warning("iwctl scan falló: %s", err.strip())
+                return
+            for _ in range(20):  # hasta 10 s
+                await asyncio.sleep(0.5)
+                rc, out, _ = await _run("iwctl", "station", device, "show")
+                if rc != 0 or re.search(r"Scanning\s+no", _ANSI.sub("", out)):
+                    return
+            decky.logger.warning("iwd sigue escaneando tras 10 s; usamos lo que haya")
+        else:
+            rc, _, err = await _run("iw", "dev", device, "scan", timeout=40)
             if rc != 0:
                 decky.logger.warning("iw scan falló (%s); usando scan dump", err.strip())
-                out = ""
-        if not out:
-            rc, out, _ = await _run("iw", "dev", device, "scan", "dump")
-            if rc != 0:
-                return []
+
+    async def _iw_scan(self, device: str, rescan: bool) -> list[dict[str, Any]]:
+        """Lista de BSS del driver (`iw scan dump`), tras forzar un escaneo si
+        se pide. Cada entrada lleva `signal_dbm` y `age_ms` (antigüedad)."""
+        if rescan:
+            await self._trigger_scan(device)
+        rc, out, _ = await _run("iw", "dev", device, "scan", "dump")
+        if rc != 0:
+            return []
 
         aps: list[dict[str, Any]] = []
         cur: dict[str, Any] | None = None
@@ -320,6 +342,8 @@ class Plugin:
                 if m:
                     cur["signal_dbm"] = float(m.group(1))
                     cur["signal"] = _dbm_to_percent(float(m.group(1)))
+            elif t.startswith("last seen:") and "ms ago" in t:
+                cur["age_ms"] = _to_int(t)
             elif t.startswith("SSID:"):
                 cur["ssid"] = t[5:].strip()
             elif t.startswith("DS Parameter set: channel"):
@@ -348,11 +372,29 @@ class Plugin:
         except Exception:  # noqa: BLE001
             decky.logger.exception("iw scan")
             iw_aps = []
+        by_bssid = {a["bssid"]: a for a in iw_aps}
+        # Señal: usamos siempre el dBm del driver (misma fuente y misma escala
+        # para todos los APs). El % de nmcli viene de iwd por otra vía, con otra
+        # fórmula y otra antigüedad, y no es comparable.
+        for ap in nm_aps:
+            iw = by_bssid.get(ap["bssid"])
+            if iw and "signal_dbm" in iw:
+                ap["signal_dbm"] = iw["signal_dbm"]
+                ap["signal"] = iw["signal"]
+                ap["age_ms"] = iw.get("age_ms", 0)
         seen = {a["bssid"] for a in nm_aps}
         extra = [a for a in iw_aps if a["bssid"] not in seen]
         if extra:
             decky.logger.info("iw aporta %d APs que NM no listaba: %s", len(extra), [a["bssid"] for a in extra])
         aps = nm_aps + extra
+        # El AP en uso: señal en vivo del enlace, no la del último escaneo
+        link = await self._iw_link(device)
+        if "signal_dbm" in link:
+            for ap in aps:
+                if ap["in_use"] or ap["bssid"] == link.get("bssid"):
+                    ap["signal_dbm"] = link["signal_dbm"]
+                    ap["signal"] = _dbm_to_percent(link["signal_dbm"])
+                    ap["age_ms"] = 0
         aps.sort(key=lambda a: (not a["in_use"], -a["signal"]))
         return aps
 
@@ -438,7 +480,7 @@ class Plugin:
                 result.setdefault("bssid", current["bssid"])
                 result.setdefault("vendor", current["vendor"])
                 result["ssid"] = current["ssid"]
-                result["signal"] = current["signal"]
+                result["signal"] = current["signal"]  # ya viene del dBm en vivo (ver _list_aps)
                 result["chan"] = current["chan"]
                 result.setdefault("freq", current["freq"])
                 result.setdefault("band", current["band"])
