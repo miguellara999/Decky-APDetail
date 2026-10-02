@@ -1,5 +1,10 @@
 # APDetail — Notas de desarrollo
 
+> **Note for English speakers:** this is the internal design document and it is written in
+> Spanish. [README.md](README.md) is in English and covers usage, the iwd developer-mode
+> caveat and the build steps. The code and log messages are in English-friendly form; this
+> file mostly records *why* each decision was made.
+
 Documento de referencia para retomar el plugin. Explica cómo está montado, por qué se tomaron
 ciertas decisiones (sobre todo lo de iwd) y cómo depurar en la Steam Deck.
 

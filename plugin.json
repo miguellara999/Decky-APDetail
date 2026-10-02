@@ -1,11 +1,17 @@
 {
   "name": "APDetail",
   "author": "Miguel",
-  "flags": ["root"],
+  "flags": [
+    "root"
+  ],
   "api_version": 1,
   "publish": {
-    "tags": ["wifi", "network", "utility"],
-    "description": "Muestra a qué punto de acceso WiFi (BSSID) estás conectado y permite cambiar a otro AP del mismo SSID.",
+    "tags": [
+      "wifi",
+      "network",
+      "utility"
+    ],
+    "description": "Shows which WiFi access point (BSSID) you are connected to and lets you switch to another AP on the same SSID. Useful on mesh networks where the Deck gets stuck on a distant AP.",
     "image": ""
   }
 }

@@ -1,56 +1,62 @@
 # APDetail
 
-Plugin para [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) que muestra a qué
-punto de acceso WiFi (BSSID) está conectada la Steam Deck y permite cambiar a otro AP del mismo
-SSID. Útil en redes con varios puntos de acceso (mesh, repetidores) cuando la Deck se queda
-"pegada" al AP más lejano.
+A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin that shows which WiFi
+access point (BSSID) your Steam Deck is connected to, and lets you switch to a different AP on the
+same SSID. Useful on networks with several access points (mesh, repeaters, powerline adapters)
+where the Deck gets "stuck" on the furthest one.
 
-## Qué hace
+> The plugin UI is currently in Spanish. Translations are welcome — see
+> [Contributing](#contributing).
 
-- Muestra la conexión actual: SSID, BSSID, fabricante del AP, señal (dBm en vivo y %), banda,
-  canal, velocidad e IP.
-- Lista los APs visibles con el mismo SSID, ordenados por señal, con fabricante, MAC, banda,
-  canal, dBm/% y antigüedad de la medición. Un interruptor permite ver todas las redes.
-- Permite cambiarse a un AP concreto pulsando sobre él (reasociación rápida, sin cortar la
-  conexión).
+## Features
 
-## Uso
+- Current connection at a glance: SSID, BSSID, AP vendor, signal (live dBm and %), band, channel,
+  link rate and IP address.
+- All visible APs on the same SSID, sorted by signal, each with vendor, MAC, band, channel, dBm/%
+  and how old the reading is. A toggle shows every network instead.
+- Switch to a specific AP by tapping it — a fast reassociation that does not drop the connection.
 
-1. Abre el menú de acceso rápido (…) → APDetail.
-2. La primera vez pulsa **«Activar modo desarrollador de iwd»** (necesario en SteamOS para poder
-   elegir AP; ver más abajo). El WiFi se corta unos segundos y reconecta solo.
-3. Pulsa sobre el AP al que quieras cambiarte. Un aviso confirma el cambio y el BSSID de arriba
-   se actualiza.
+## Usage
 
-Con el panel abierto la lista se refresca cada 10 s y cada 30 s hace un escaneo dirigido a los
-canales de tu SSID; «Volver a escanear» hace uno completo. Al cerrar el panel no se escanea.
+1. Open the Quick Access Menu (…) → APDetail.
+2. The first time, press **"Activar modo desarrollador de iwd"** (*Enable iwd developer mode*).
+   This is required on SteamOS in order to choose an AP — see [SteamOS and iwd](#steamos-and-iwd)
+   below. WiFi drops for a few seconds and reconnects on its own.
+3. Tap the AP you want to switch to. A toast confirms the change and the BSSID at the top updates.
 
-Sobre la señal: compara en **dBm** (misma fuente y escala para todos los APs; el del AP en uso
-es en vivo). Diferencias menores de ~6 dB son ruido. «hace N s» indica que el dato viene del
-último escaneo en que se oyó ese AP; «visto hace N s» que el kernel ya lo caducó y se muestra
-de memoria (hasta 3 min).
+While the panel is open the list refreshes every 10 s, and every 30 s it runs a scan targeted at
+the channels your SSID uses. "Volver a escanear" (*Rescan*) runs a full scan. Nothing is scanned
+once the panel is closed.
 
-## SteamOS e iwd (importante)
+**Reading the signal:** compare APs in **dBm** — every AP is measured from the same source on the
+same scale, and the one in use is read live from the link. Differences under ~6 dB are noise.
+"hace N s" (*N s ago*) means the reading comes from the last scan in which that AP was heard;
+"visto hace N s" (*last seen N s ago*) means the kernel already expired it and the plugin is
+showing it from its own memory (up to 3 minutes).
 
-SteamOS (3.5+) usa **iwd** como backend WiFi de NetworkManager. iwd agrupa los APs por red y
-no expone la elección de BSSID a NetworkManager, así que:
+## SteamOS and iwd
 
-- La lista de APs se obtiene directamente del driver con `iw` (NetworkManager solo enseña uno
-  por SSID).
-- Para cambiar de AP se usa `iwctl debug <dev> roam <bssid>`, que **solo existe si iwd corre en
-  modo desarrollador**. El plugin ofrece un botón «Activar modo desarrollador de iwd» que crea el
-  drop-in `/etc/systemd/system/iwd.service.d/apdetail-developer.conf` y reinicia iwd; el mismo
-  botón pasa a «Revertir…» y deja iwd como estaba. Este modo expone comandos extra por D-Bus
-  (solo para root) y **desactiva el autoconnect de iwd** (`station_create` en `src/station.c`),
-  lo que haría que la Deck no reconectase sola tras suspender. El plugin lo compensa: un
-  vigilante en segundo plano reactiva `AutoConnect` (propiedad de `StationDebug`) siempre que la
-  encuentra desactivada. Escaneo, roaming y consumo no cambian.
+SteamOS (3.5+) uses **iwd** as NetworkManager's WiFi backend. iwd groups APs by network and does
+not expose BSSID selection to NetworkManager, which has two consequences:
 
-  Al **desinstalar** el plugin, el modo desarrollador se revierte solo: se elimina el drop-in y
-  iwd se reinicia en modo normal 90 s después (reconecta por sí mismo). Al **actualizar** el
-  plugin no pasa nada: la versión nueva cancela ese reinicio.
+- The AP list is read straight from the driver with `iw`, because NetworkManager only ever shows
+  one BSSID per SSID.
+- Switching AP uses `iwctl debug <dev> roam <bssid>`, which **only exists when iwd runs in
+  developer mode**. The plugin has a button that creates the drop-in
+  `/etc/systemd/system/iwd.service.d/apdetail-developer.conf` and restarts iwd; the same button
+  then offers to revert it and leave iwd exactly as it was.
 
-  Equivalente manual:
+  Developer mode exposes extra D-Bus interfaces (root only) and **disables iwd's autoconnect**
+  (`station_create` in iwd's `src/station.c`), which would stop the Deck from reconnecting by
+  itself after suspend. The plugin compensates for this: a background watchdog re-enables the
+  `AutoConnect` property (on `StationDebug`) whenever it finds it off. Scanning, roaming and power
+  consumption are unaffected.
+
+  **Uninstalling** the plugin reverts developer mode on its own: the drop-in is removed and iwd is
+  restarted in normal mode 90 s later (it reconnects by itself). **Updating** the plugin changes
+  nothing — the new version cancels that pending restart.
+
+  Manual equivalent:
 
   ```bash
   sudo mkdir -p /etc/systemd/system/iwd.service.d
@@ -62,47 +68,63 @@ no expone la elección de BSSID a NetworkManager, así que:
   sudo systemctl daemon-reload && sudo systemctl restart iwd
   ```
 
-  El WiFi se cae unos segundos y reconecta solo. Para revertirlo, borra ese fichero y repite
+  WiFi drops for a few seconds and reconnects. To revert, delete that file and repeat
   `daemon-reload` + `restart iwd`.
 
-- Con iwd no hay "fijación": tras el cambio, iwd se queda en ese AP hasta que la señal baje de su
-  umbral de roaming (−70 dBm por defecto).
+- With iwd there is no BSSID "pinning": after a switch, iwd stays on that AP until the signal
+  falls below its roaming threshold (−70 dBm by default) and it decides for itself again.
 
-En sistemas con wpa_supplicant (no SteamOS), el plugin fija `802-11-wireless.bssid` en el perfil
-de NetworkManager; en ese caso el AP queda fijado hasta pulsar «Quitar fijación».
+On systems using wpa_supplicant (not SteamOS) the plugin pins `802-11-wireless.bssid` on the
+NetworkManager profile instead, and the AP stays pinned until you press the button that clears it.
 
-## Desarrollo
+## Installing
 
-Requisitos: Node.js 18+, pnpm.
+Grab a release zip, or build one yourself (see below), then on the Deck:
+Decky → ⚙ → Developer → **Install plugin from zip**.
+
+## Development
+
+Requirements: Node.js 18+, pnpm.
 
 ```bash
 pnpm install
-pnpm run build     # genera dist/index.js
-pnpm run watch     # recompila al guardar
+pnpm run build     # builds dist/index.js
+pnpm run watch     # rebuild on save
 ```
 
-### Desplegar en la Deck por SSH
+### Deploy to the Deck over SSH
 
 ```bash
 DECK_HOST=deck@steamdeck ./scripts/deploy.sh
 ```
 
-### Generar zip para instalar a mano
+### Build an installable zip
 
 ```bash
 ./scripts/build-zip.sh   # -> out/APDetail.zip
 ```
 
-Luego en la Deck: Decky > ⚙ > Desarrollador > «Instalar plugin desde zip».
+## How it works
 
-## Documentación técnica
-
-Ver [DESARROLLO.md](DESARROLLO.md) para arquitectura, decisiones y depuración.
-
-## Cómo funciona (resumen)
-
-- **Backend** (`main.py`, corre como root): `nmcli` para el estado, `iw` para la lista de BSS y la
-  señal en vivo, `iwctl`/`busctl` (API `StationDebug` de iwd) para cambiar de AP, escanear canales
-  concretos y mantener el autoconnect. Fabricante por base OUI del IEEE embebida (offline).
+- **Backend** (`main.py`, runs as root): `nmcli` for connection state, `iw` for the BSS list and
+  live signal, `iwctl`/`busctl` (iwd's `StationDebug` API) to switch AP, scan specific channels and
+  keep autoconnect enabled. Vendor lookup uses an embedded IEEE OUI database and works offline.
 - **Frontend** (`src/index.tsx`): React + `@decky/ui`.
-- Probado en SteamOS (backend iwd) con una red de dos APs (devolo + MikroTik) en el mismo SSID.
+- Tested on SteamOS (iwd backend) with a two-AP network (devolo + MikroTik) sharing one SSID.
+
+See [DESARROLLO.md](DESARROLLO.md) for the full architecture, the reasoning behind each decision
+and debugging notes. **That document is written in Spanish**; the sections above cover what you
+need to use the plugin, and the code and log messages are the best reference beyond that.
+
+## Contributing
+
+Issues and pull requests are welcome. Two things that would help most:
+
+- **Translating the UI.** All user-facing strings live in `src/index.tsx` and are currently
+  hardcoded in Spanish; the plugin has no i18n layer yet.
+- **Testing on other setups** — other mesh systems, 6 GHz APs, or SteamOS versions where the iwd
+  unit differs from upstream.
+
+## License
+
+[MIT](LICENSE)

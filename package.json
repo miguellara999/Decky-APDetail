@@ -1,7 +1,7 @@
 {
   "name": "apdetail",
   "version": "0.1.0",
-  "description": "Muestra a qué punto de acceso WiFi (BSSID) está conectada la Steam Deck y permite cambiar a otro AP del mismo SSID.",
+  "description": "Decky Loader plugin to see which WiFi access point your Steam Deck is connected to, and switch to a different AP on the same SSID.",
   "type": "module",
   "scripts": {
     "build": "shx rm -rf dist && rollup -c",
