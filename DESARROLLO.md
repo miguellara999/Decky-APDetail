@@ -37,6 +37,7 @@ plugin.json           Metadatos Decky. flags: ["root"] es imprescindible
 oui.json.gz           Base de datos OUI → fabricante (IEEE), ~600 KB
 scripts/build-zip.sh  Compila y genera out/APDetail.zip (instalable desde Decky)
 scripts/deploy.sh     Compila y despliega por SSH (DECK_HOST=deck@ip)
+src/i18n.ts           Traducciones (es/en) y detección del idioma de Steam
 scripts/build-oui.py  Regenera oui.json.gz descargando los CSV del IEEE
 .devtest/             (gitignored) stub de `decky` y scripts para probar main.py en el PC
 ```
@@ -242,6 +243,33 @@ El resto del unit (sandboxing, `StateDirectory=iwd`, etc.) se conserva porque so
 - Botón "Quitar fijación" solo aparece con backend wpa y BSSID fijado.
 - Feedback siempre por `toaster.toast`.
 
+### Idiomas (`src/i18n.ts`)
+
+Castellano si la interfaz de Steam está en español, inglés en cualquier otro caso. Detección en
+dos pasos, vía el hook `useLang()`:
+
+1. **Síncrona** (`detectLang`): `window.LocalizationManager.m_rgLocalesToUse[0]`, el locale
+   elegido por el usuario (p. ej. `"es-ES"`; el resto de la lista son los fallbacks de Steam).
+   Si no está disponible, `navigator.language`; si tampoco, inglés.
+2. **Asíncrona** (`confirmLang`): `SteamClient.Settings.GetCurrentLanguage()`, que devuelve
+   nombres tipo `"spanish"` / `"latam"`. Corrige la detección síncrona tras el primer render.
+
+Todas las claves viven en el objeto `en`, cuyo tipo (`Strings`) obliga a que `es` tenga
+exactamente las mismas: si añades una cadena y olvidas traducirla, `tsc` falla. Las que llevan
+interpolación son funciones (`connectedTo(bssid, band)`, `agoSeconds(s)`…).
+
+Añadir un idioma: copiar el bloque `en`, traducir y añadir su prefijo de locale (y el nombre que
+usa Steam) a `LOCALE_PREFIXES`.
+
+Test: `.devtest/i18n/` — compila `src/i18n.ts` suelto y comprueba la detección con locales
+reales y que ambas tablas tengan las mismas claves:
+
+```bash
+pnpm exec tsc src/i18n.ts --outDir .devtest/i18n --module es2020 --target es2020 \
+  --moduleResolution node --skipLibCheck   # los 2 errores de globals son esperados
+node .devtest/i18n/test.mjs
+```
+
 ## 7. Depurar en la Deck
 
 Logs del backend: `/home/deck/homebrew/logs/APDetail/<fecha>.log` (uno por carga del plugin).
@@ -287,6 +315,8 @@ funciona (Decky desinstala e instala).
 8. La señal "se invertía" al cambiar de AP → fuentes/escalas mezcladas. dBm del driver para todos,
    en vivo para el AP en uso, % con la fórmula de NM, antigüedad visible y escaneo vía iwd.
 9. Escaneos periódicos dirigidos solo a las frecuencias conocidas del SSID (StationDebug.Scan).
+10. Repo público en GitHub: README/plugin.json en inglés, BSSID de ejemplo anonimizados (también
+    en el historial) e i18n es/en siguiendo el idioma de Steam.
 
 ## 9. Ideas para más adelante
 
@@ -294,4 +324,5 @@ funciona (Decky desinstala e instala).
 - Auto-roam opcional: si otro AP del mismo SSID supera al actual en X dB durante N segundos,
   cambiar solo. Cuidado con el ping-pong.
 - Mostrar el estado del modo desarrollador de iwd también cuando no hay conexión WiFi.
-- Traducción (ahora todo está en castellano fijo).
+- Más idiomas en la UI (la estructura ya está, ver `src/i18n.ts`).
+- Mensajes de log del backend en inglés (ahora están en castellano).

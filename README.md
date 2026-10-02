@@ -5,9 +5,6 @@ access point (BSSID) your Steam Deck is connected to, and lets you switch to a d
 same SSID. Useful on networks with several access points (mesh, repeaters, powerline adapters)
 where the Deck gets "stuck" on the furthest one.
 
-> The plugin UI is currently in Spanish. Translations are welcome — see
-> [Contributing](#contributing).
-
 ## Features
 
 - Current connection at a glance: SSID, BSSID, AP vendor, signal (live dBm and %), band, channel,
@@ -19,20 +16,22 @@ where the Deck gets "stuck" on the furthest one.
 ## Usage
 
 1. Open the Quick Access Menu (…) → APDetail.
-2. The first time, press **"Activar modo desarrollador de iwd"** (*Enable iwd developer mode*).
-   This is required on SteamOS in order to choose an AP — see [SteamOS and iwd](#steamos-and-iwd)
-   below. WiFi drops for a few seconds and reconnects on its own.
+2. The first time, press **Enable iwd developer mode**. This is required on SteamOS in order to
+   choose an AP — see [SteamOS and iwd](#steamos-and-iwd) below. WiFi drops for a few seconds and
+   reconnects on its own.
 3. Tap the AP you want to switch to. A toast confirms the change and the BSSID at the top updates.
 
+The plugin follows the Steam UI language: Spanish when Steam is in Spanish, English otherwise.
+
 While the panel is open the list refreshes every 10 s, and every 30 s it runs a scan targeted at
-the channels your SSID uses. "Volver a escanear" (*Rescan*) runs a full scan. Nothing is scanned
-once the panel is closed.
+the channels your SSID uses. **Rescan** runs a full scan. Nothing is scanned once the panel is
+closed.
 
 **Reading the signal:** compare APs in **dBm** — every AP is measured from the same source on the
 same scale, and the one in use is read live from the link. Differences under ~6 dB are noise.
-"hace N s" (*N s ago*) means the reading comes from the last scan in which that AP was heard;
-"visto hace N s" (*last seen N s ago*) means the kernel already expired it and the plugin is
-showing it from its own memory (up to 3 minutes).
+"N s ago" means the reading comes from the last scan in which that AP was heard; "last seen N s
+ago" means the kernel already expired it and the plugin is showing it from its own memory (up to
+3 minutes).
 
 ## SteamOS and iwd
 
@@ -114,14 +113,16 @@ DECK_HOST=deck@steamdeck ./scripts/deploy.sh
 
 See [DESARROLLO.md](DESARROLLO.md) for the full architecture, the reasoning behind each decision
 and debugging notes. **That document is written in Spanish**; the sections above cover what you
-need to use the plugin, and the code and log messages are the best reference beyond that.
+need to use the plugin, and the code is the best reference beyond that. Backend log messages are
+also in Spanish.
 
 ## Contributing
 
 Issues and pull requests are welcome. Two things that would help most:
 
-- **Translating the UI.** All user-facing strings live in `src/index.tsx` and are currently
-  hardcoded in Spanish; the plugin has no i18n layer yet.
+- **More UI languages.** All user-facing strings live in `src/i18n.ts`, which currently ships
+  Spanish and English. Adding a language means copying the `en` block, translating the values and
+  listing the locale prefix in `LOCALE_PREFIXES` — no changes anywhere else.
 - **Testing on other setups** — other mesh systems, 6 GHz APs, or SteamOS versions where the iwd
   unit differs from upstream.
 
