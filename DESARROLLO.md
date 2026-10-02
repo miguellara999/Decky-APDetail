@@ -20,6 +20,9 @@ Red de referencia con la que se desarrolló (2 APs, 2 fabricantes):
 | `AA:BB:CC:11:22:42/43` | devolo AG | 2.4 GHz + 5 GHz |
 | `DD:EE:FF:33:44:03/04` | MikroTik (Routerboard.com) | 5 GHz + 2.4 GHz (SSID oculto) |
 
+(BSSID de ejemplo; los reales se han anonimizado. Lo relevante es que son **dos fabricantes
+distintos** bajo el mismo SSID, y que el segundo tiene el 2.4 GHz con SSID oculto.)
+
 ## 2. Estructura del repo
 
 ```
